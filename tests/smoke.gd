@@ -1,5 +1,6 @@
 extends Node
-## TEMPORARY headless smoke harness. Deleted after use - not part of the build.
+## Headless smoke harness. Exits non-zero on failure.
+##   godot --headless --path . tests/smoke.tscn --quit-after 3000
 
 var arena: Arena
 var player: Player
@@ -11,12 +12,13 @@ var fails := 0
 
 func _ready() -> void:
 	_test_shapes()
+	_test_view()
 	var ps := load("res://scenes/main.tscn") as PackedScene
 	arena = ps.instantiate() as Arena
 	add_child(arena)
 	player = arena.player
 	dummy = arena.dummy
-	print("--- boot ok, player at %s, dummy at %s" % [player.global_position, dummy.global_position])
+	print("--- boot ok, player world %s, dummy world %s" % [player.world_pos, dummy.world_pos])
 
 
 func _check(name: String, cond: bool) -> void:
@@ -52,9 +54,22 @@ func _test_shapes() -> void:
 	_check("rect body clips edge", r.overlaps_circle(Vector2(100, 70), 30.0))
 
 
+func _test_view() -> void:
+	var w := Vector2(400.0, 900.0)
+	var s := View.to_screen(w)
+	_check("view squashes depth only", is_equal_approx(s.x, w.x) and s.y < w.y)
+	_check("view round-trips", View.to_world(s).is_equal_approx(w))
+	_check("arena clamp keeps inside", Actor.in_arena(
+		Actor.clamp_to_arena(Tune.ARENA_CENTER + Vector2(9999, 9999))))
+
+
 func _aim_at_dummy() -> void:
-	player.cast_aim = (dummy.global_position - player.global_position).normalized()
-	player.facing = player.cast_aim
+	# There is no cursor in a headless run, so drive the aim hook directly.
+	player.aim_override_active = true
+	player.aim_override = dummy.world_pos
+	player.act_aim = (dummy.world_pos - player.world_pos).normalized()
+	player.act_target = dummy.world_pos
+	player.facing = player.act_aim
 
 
 func _process(delta: float) -> void:
@@ -64,86 +79,151 @@ func _process(delta: float) -> void:
 	match step:
 		0:
 			if t > 0.3:
-				print("--- casting every skill, COMMIT")
-				player._begin_cast(0)
+				print("--- auto attack chain")
+				_check("chain starts at 0", player.auto_step == 0)
 				_aim_at_dummy()
+				player._begin_action(Tune.AUTO_ACTION)
 				step = 1
 		1:
-			if player.state == Player.State.CASTING:
+			if player.state == Player.State.ACTING:
 				_aim_at_dummy()
-			elif t > 1.5:
-				player._begin_cast(2)
+			elif t > 0.8:
+				_check("chain advanced", player.auto_step == 1)
 				_aim_at_dummy()
+				player._begin_action(Tune.AUTO_ACTION)
 				step = 2
 		2:
-			if player.state == Player.State.CASTING:
-				_aim_at_dummy()
-			elif t > 3.4:
-				player._begin_cast(4)   # rect / stagger
+			if player.state != Player.State.ACTING and t > 1.4:
+				player._begin_action(Tune.AUTO_ACTION)   # finisher step
 				_aim_at_dummy()
 				step = 3
 		3:
-			if t > 4.8:
-				_check("bolts + rect dealt damage", dummy.total_taken > 0.0)
-				_check("stagger applied", dummy.stagger > 0.0)
-				print("--- damage so far: %.0f, stagger %.0f" % [dummy.total_taken, dummy.stagger])
-				print("--- testing AoE shape resolution")
-				player._resolve_shape(AtkShape.circle(dummy.global_position, 120.0), 50.0, 10.0, 1, false)
+			if player.state != Player.State.ACTING and t > 2.0:
+				_check("chain wrapped after finisher", player.auto_step == 0)
+				_check("autos dealt damage", dummy.total_taken > 0.0)
+				_check("autos charged overheat", player.identity > 0.0)
+				print("--- instants: 1 (rain) and 2 (counter)")
+				_check("skill 1 is instant", Tune.cast_time(0, player.variant_idx) == 0.0)
+				_check("skill 2 is instant", Tune.cast_time(1, player.variant_idx) == 0.0)
+				player.world_pos = dummy.world_pos + Vector2(0, 150)
+				_aim_at_dummy()
+				player._begin_action(0)
 				step = 4
 		4:
-			if t > 5.0:
-				print("--- testing dash-cancel")
-				player._begin_cast(2)  # long nuke
+			if t > 2.05:
+				_check("instant did not enter a cast", player.state != Player.State.ACTING)
+				_check("rain went on cooldown", player.cooldowns[0] > 0.0)
+				set_meta("rain_start", dummy.total_taken)
 				step = 5
 		5:
-			if t > 5.3:
-				_check("is casting before cancel", player.state == Player.State.CASTING)
-				player._buffer(Tune.SKILL_COUNT - 1)  # dash input
+			# The rain must arrive SPREAD OVER its duration, not all on one frame.
+			# Sampling at three points proves it is still landing later.
+			if t > 3.2:
+				set_meta("rain_mid", dummy.total_taken)
 				step = 6
 		6:
-			if t > 5.5:
-				_check("dash cancelled the cast", player.state != Player.State.CASTING)
-				_check("cancel charged the cooldown", player.cooldowns[2] > 0.0)
-				_check("dash spent a charge", player.dash_charges < Tune.DASH_CHARGES)
-				_check("i-frames active after dash", player.invuln > 0.0)
-				print("--- testing player damage + i-frame avoidance")
-				var took := player.take_hit(100.0, "TEST")
-				_check("i-frames avoided the hit", not took)
+			if t > 5.2:
+				var a: float = get_meta("rain_start", 0.0)
+				var b: float = get_meta("rain_mid", 0.0)
+				var c := dummy.total_taken
+				_check("rain landed damage", c > a)
+				_check("rain still landing mid-duration", b > a)
+				_check("rain still landing after mid", c > b)
+				print("--- rain: %.0f by mid, %.0f total over %.1fs" % [b - a, c - a, Tune.SKILLS[0]["duration"]])
+				_aim_at_dummy()
+				player._begin_action(1)  # counter
 				step = 7
 		7:
-			if t > 6.2:
-				var took2 := player.take_hit(100.0, "TEST")
-				_check("hit lands once i-frames expire", took2)
-				_check("player hp dropped", player.hp < Tune.PLAYER_MAX_HP)
-				print("--- switching to FLOW")
-				player._toggle_variant()
-				_check("variant switched", player.variant_idx == Tune.VARIANT_FLOW)
-				player._begin_cast(0)
+			if t > 5.5:
+				_check("counter is instant too", player.state != Player.State.ACTING)
+				print("--- long casts + queuing")
 				_aim_at_dummy()
+				player._begin_action(2)
 				step = 8
 		8:
-			if t > 7.0:
-				_check("flow cast is shorter", Tune.cast_time(0, Tune.VARIANT_FLOW) < Tune.cast_time(0, Tune.VARIANT_COMMIT))
-				_check("flow damage is lower", Tune.damage(0, Tune.VARIANT_FLOW) < Tune.damage(0, Tune.VARIANT_COMMIT))
-				print("--- telegraph lifecycle")
-				var tg := Telegraph.spawn(arena.world, AtkShape.cone(dummy.global_position, Vector2.UP, 200.0, 40.0), 0.4, 0.1, Color.RED)
-				tg.activated.connect(func(_s: AtkShape, _x: Telegraph) -> void: print("--- telegraph went live"))
+			if player.state == Player.State.ACTING and t > 5.8:
+				# Queue 4 during 3's cast. It must survive to the end of the cast.
+				player._buffer(3)
+				_check("queue outlives the input buffer",
+					player._buf_time > Tune.INPUT_BUFFER)
 				step = 9
 		9:
-			if t > 7.9:
-				var live := arena.telegraphs().size()
-				print("--- live telegraphs after expiry: %d" % live)
-				print("--- restart")
-				arena.restart()
+			if t > 7.2:
+				_check("queued cast started with no gap", player.act_idx == 3 or player.cooldowns[3] > 0.0)
+				_check("first cast went on cooldown", player.cooldowns[2] > 0.0)
 				step = 10
 		10:
-			if t > 8.3:
+			if t > 9.6:
+				print("--- dash-cancel")
+				player.cooldowns[2] = 0.0
+				player._begin_action(2)
+				step = 11
+		11:
+			if t > 9.9:
+				_check("is casting before cancel", player.is_casting())
+				player._buffer(Tune.SKILL_COUNT)
+				step = 12
+		12:
+			if t > 10.1:
+				_check("dash cancelled the cast", not player.is_casting())
+				_check("cancel charged the cooldown", player.cooldowns[2] > 0.0)
+				_check("dash spent a charge", player.dash_charges < Tune.DASH_CHARGES)
+				_check("i-frames active", player.invuln > 0.0)
+				_check("i-frames avoided a hit", not player.take_hit(100.0, "TEST"))
+				step = 13
+		13:
+			if t > 10.8:
+				_check("hit lands once i-frames expire", player.take_hit(100.0, "TEST"))
+				print("--- overheat")
+				player.identity = Tune.IDENTITY_MAX
+				player.cooldowns[3] = 20.0
+				_check("overheat activates at full", player._try_overheat())
+				_check("overheat reset cooldowns", player.cooldowns[3] == 0.0)
+				_check("overheat consumed the meter", player.identity == 0.0)
+				_check("overheat shortens casts",
+					Tune.cast_time(2, player.variant_idx, true) < Tune.cast_time(2, player.variant_idx, false))
+				_check("overheat raises damage",
+					Tune.damage_mult(2, player.variant_idx, true) > Tune.damage_mult(2, player.variant_idx, false))
+				_check("cannot re-activate mid-window", not player._try_overheat())
+				step = 14
+		14:
+			if t > 11.2:
+				print("--- variants")
+				player._toggle_variant()
+				_check("variant switched", player.variant_idx == Tune.VARIANT_FLOW)
+				_check("flow shortens casts",
+					Tune.cast_time(2, Tune.VARIANT_FLOW) < Tune.cast_time(2, Tune.VARIANT_COMMIT))
+				_check("flow lowers cast damage",
+					Tune.damage_mult(2, Tune.VARIANT_FLOW) < Tune.damage_mult(2, Tune.VARIANT_COMMIT))
+				_check("variant does not touch instants",
+					is_equal_approx(Tune.damage_mult(0, Tune.VARIANT_FLOW), Tune.damage_mult(0, Tune.VARIANT_COMMIT)))
+				_check("variant does not touch autos",
+					is_equal_approx(Tune.damage_mult(Tune.AUTO_ACTION, Tune.VARIANT_FLOW),
+						Tune.damage_mult(Tune.AUTO_ACTION, Tune.VARIANT_COMMIT)))
+				print("--- multi-hit telegraph")
+				var tg := Telegraph.spawn(AtkShape.circle(dummy.world_pos, 120.0), 0.1, 0.05, Color.RED)
+				tg.hits = 4
+				tg.hit_interval = 0.15
+				set_meta("pulses", 0)
+				tg.activated.connect(func(_s: AtkShape, _x: Telegraph) -> void:
+					set_meta("pulses", int(get_meta("pulses")) + 1))
+				step = 15
+		15:
+			if t > 12.4:
+				_check("telegraph pulsed 4 times", int(get_meta("pulses")) == 4)
+				_check("telegraph cleaned itself up", arena.telegraphs().is_empty())
+				print("--- restart")
+				arena.restart()
+				step = 16
+		16:
+			if t > 12.8:
 				_check("restart reset hp", is_equal_approx(player.hp, Tune.PLAYER_MAX_HP))
 				_check("restart reset cooldowns", player.cooldowns[2] == 0.0)
 				_check("restart reset dash", player.dash_charges == Tune.DASH_CHARGES)
+				_check("restart reset overheat", player.identity == 0.0 and player.overheat == 0.0)
 				_check("restart reset target", dummy.total_taken == 0.0)
 				_check("hostile registry intact", Hostile.all().size() == 1)
 				print("=== %s (%d failures)" % ["ALL PASS" if fails == 0 else "FAILURES", fails])
-				step = 11
-		11:
+				step = 17
+		17:
 			get_tree().quit(1 if fails > 0 else 0)

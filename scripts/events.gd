@@ -19,6 +19,11 @@ signal cast_completed(skill_idx: int)
 signal cast_cancelled(skill_idx: int, cooldown_paid: float)
 ## Variant toggled. index into Tune.VARIANTS.
 signal variant_changed(variant_idx: int)
+## Overheat meter reached full and can be spent.
+signal identity_full()
+## Overheat window opened / closed.
+signal identity_activated()
+signal identity_ended()
 ## Screen shake request.
 signal shake_requested(strength: float)
 ## Brief time freeze request, in seconds of real time.
