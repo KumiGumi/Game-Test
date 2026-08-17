@@ -24,6 +24,12 @@ signal identity_full()
 ## Overheat window opened / closed.
 signal identity_activated()
 signal identity_ended()
+
+## The Warden began a pattern: index into Tune.WARDEN_PATTERNS, and its name.
+signal warden_pattern_started(idx: int, pattern_name: String)
+signal warden_defeated()
+## The player hit 0 HP. Step 4 turns this into the real failure loop.
+signal player_died()
 ## Screen shake request.
 signal shake_requested(strength: float)
 ## Brief time freeze request, in seconds of real time.

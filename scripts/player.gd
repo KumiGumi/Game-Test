@@ -4,8 +4,8 @@ extends Actor
 ##
 ## The action economy is the point of this file:
 ##
-##   RMB   auto attack   - 3-step chain, no cooldown, holdable. Fills the gaps
-##                         so the hands are never idle, and charges Overheat.
+##   RMB   auto attack   - one press, one shot. No cooldown, holdable. Fills the
+##                         gaps so the hands are never idle, and charges Overheat.
 ##   1 / 2 instants      - low cooldown, usable as filler. 1 is multi-hit,
 ##                         2 is the counter (a counter you have to CAST is not
 ##                         a counter, so it must be instant).
@@ -18,6 +18,10 @@ extends Actor
 ## break out of.
 
 enum State { FREE, ACTING, DASHING }
+
+## The boss needs to find the player without the Arena brokering it, and the
+## player never references the boss, so this stays acyclic.
+static var instance: Player
 
 var state: State = State.FREE
 var variant_idx: int = Tune.START_VARIANT
@@ -52,10 +56,6 @@ var act_variant: int = 0
 ## Overheat state captured at start, for the same reason.
 var act_overheated: bool = false
 
-# --- auto attack chain ---
-var auto_step: int = 0
-var _auto_chain_timer: float = 0.0
-
 # --- Overheat (identity) ---
 var identity: float = 0.0
 var overheat: float = 0.0
@@ -80,12 +80,18 @@ var aim_override: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
+	instance = self
 	body_radius = Tune.PLAYER_RADIUS
 	height = Tune.PLAYER_HEIGHT
 	cooldowns.resize(Tune.SKILL_COUNT)
 	for i in range(Tune.SKILL_COUNT):
 		cooldowns[i] = 0.0
 	Events.damage_dealt.connect(_on_damage_dealt)
+
+
+func _exit_tree() -> void:
+	if instance == self:
+		instance = null
 
 
 func variant() -> Dictionary:
@@ -156,11 +162,6 @@ func _tick_timers(delta: float) -> void:
 			dash_charges += 1
 			dash_recharge = Tune.DASH_CHARGE_COOLDOWN if dash_charges < Tune.DASH_CHARGES else 0.0
 
-	if _auto_chain_timer > 0.0:
-		_auto_chain_timer -= delta
-		if _auto_chain_timer <= 0.0:
-			auto_step = 0
-
 	if _buf_time > 0.0:
 		_buf_time -= delta
 		if _buf_time <= 0.0:
@@ -189,10 +190,10 @@ func _read_input() -> void:
 		_buffer(Tune.SKILL_COUNT)  # dash uses the slot past the hotbar
 
 	# Hold-to-repeat, but never stomping an explicit press that's already queued.
-	if Tune.ALLOW_HOLD_TO_REPEAT and _buf_idx == Tune.NO_ACTION:
-		if Input.is_action_pressed("auto_attack"):
+	if _buf_idx == Tune.NO_ACTION:
+		if Tune.AUTO_HOLD_REPEAT and Input.is_action_pressed("auto_attack"):
 			_buffer(Tune.AUTO_ACTION)
-		elif state == State.FREE and act_lock <= 0.0:
+		elif Tune.ALLOW_HOLD_TO_REPEAT and state == State.FREE and act_lock <= 0.0:
 			for i in range(Tune.SKILL_COUNT):
 				if Input.is_action_pressed("skill_%d" % (i + 1)) and cooldowns[i] <= 0.0:
 					_buffer(i)
@@ -314,10 +315,6 @@ func _begin_action(idx: int) -> void:
 
 
 func _action_cast_time(idx: int) -> float:
-	if idx == Tune.AUTO_ACTION:
-		var times: Array = Tune.AUTO["cast_times"]
-		var t := float(times[auto_step % times.size()])
-		return t * (Tune.IDENTITY_CAST_MULT if act_overheated else 1.0)
 	return Tune.cast_time(idx, act_variant, act_overheated)
 
 
@@ -384,31 +381,14 @@ func _damage_mult(idx: int) -> float:
 
 func _resolve_auto(mult: float) -> void:
 	var a: Dictionary = Tune.AUTO
-	var times: Array = a["cast_times"]
-	var step := auto_step % times.size()
-	var dmg := float(a["damages"][step]) * mult
-	var stag := float(a["staggers"][step]) * mult
-
-	if step == int(a["finisher_step"]):
-		# The chain finisher opens up into a small blast - repetition needs a
-		# shape, and a 1-2-BOOM rhythm is the cheapest way to give it one.
-		var shape := AtkShape.circle(world_pos + act_aim * 70.0, float(a["finisher_radius"]))
-		var tg := Telegraph.spawn(shape, 0.04, 0.08, a["color"])
-		tg.flash_only = true
-		tg.activated.connect(func(sh: AtkShape, _t: Telegraph) -> void:
-			_resolve_shape(sh, dmg, stag, Tune.AUTO_ACTION, false)
-		)
-	else:
-		var b := Bolt.fire(world_pos + act_aim * (body_radius + 6.0), act_aim, a["color"])
-		b.speed = a["bolt_speed"]
-		b.body_radius = a["bolt_radius"]
-		b.max_range = a["bolt_range"]
-		b.damage = dmg
-		b.stagger = stag
-		b.action_idx = Tune.AUTO_ACTION
-
-	auto_step = (auto_step + 1) % times.size()
-	_auto_chain_timer = float(a["chain_reset"])
+	var b := Bolt.fire(world_pos + act_aim * (body_radius + 6.0), act_aim, a["color"])
+	b.speed = a["bolt_speed"]
+	b.body_radius = a["bolt_radius"]
+	b.max_range = a["bolt_range"]
+	b.damage = float(a["damage"]) * mult
+	b.stagger = float(a["stagger"]) * mult
+	b.action_idx = Tune.AUTO_ACTION
+	_muzzle_flash(a["color"], 0.6)
 
 
 # --- skills -----------------------------------------------------------------
@@ -428,28 +408,38 @@ func _cast_rain(s: Dictionary, mult: float, idx: int) -> void:
 	var zone := Telegraph.spawn(AtkShape.circle(centre, radius), duration, 0.01, s["color"])
 	zone.flash_only = true
 
+	_muzzle_flash(s["color"], 1.0)
+
 	for i in range(count):
 		var ang := randf() * TAU
 		var dist := sqrt(randf()) * radius * 0.85
 		var at := centre + Vector2.from_angle(ang) * dist
+		var delay := duration * (float(i) / float(maxi(count, 1)))
+		var windup := float(s["impact_windup"])
 		var tg := Telegraph.spawn(AtkShape.circle(at, float(s["impact_radius"])),
-			float(s["impact_windup"]), 0.06, s["color"])
-		tg.start_delay = duration * (float(i) / float(maxi(count, 1)))
+			windup, 0.06, s["color"])
+		tg.start_delay = delay
 		tg.activated.connect(func(sh: AtkShape, _t: Telegraph) -> void:
 			_resolve_shape(sh, dmg, stag, idx, false)
 			FxRing.ground_pop(sh.origin, 6.0, sh.radius, s["color"], 0.22)
 		)
+		# The shard leaves the player and lands exactly when the impact fires.
+		# Without it the rain just appears on the floor and reads as ambient.
+		Shard.launch(world_pos, at, delay, windup, s["color"], float(s["shard_radius"]))
 
 
 ## Instant counter strike. Landing it inside a boss counter window is the whole
 ## reason it exists, so it reports success or failure either way.
 func _cast_counter(s: Dictionary, mult: float, idx: int) -> void:
 	var shape := AtkShape.rect(world_pos, act_aim, float(s["length"]), float(s["half_width"]))
-	var tg := Telegraph.spawn(shape, float(s["impact_windup"]), 0.10, s["color"])
+	var tg := Telegraph.spawn(shape, float(s["impact_windup"]), float(s["flash_time"]), s["color"])
 	tg.flash_only = true
 	tg.activated.connect(func(sh: AtkShape, _t: Telegraph) -> void:
 		_resolve_counter(sh, s, mult, idx)
 	)
+	# A sweep out of the player's own body, so the strike reads as coming from
+	# you rather than a rectangle blinking on the floor.
+	_muzzle_flash(s["color"], 1.3)
 
 
 func _resolve_counter(shape: AtkShape, s: Dictionary, mult: float, idx: int) -> void:
@@ -498,6 +488,17 @@ func _cast_meteor(s: Dictionary, mult: float, idx: int) -> void:
 		FxRing.ground_pop(sh.origin, 20.0, sh.radius * 1.3, s["color"], 0.40)
 		Events.shake_requested.emit(9.0)
 	)
+
+
+
+
+## A burst at the player's own body. Every instant should look like it came
+## from the caster, not like the world decided something happened over there.
+func _muzzle_flash(c: Color, scale: float = 1.0) -> void:
+	var at := View.to_screen(world_pos) - Vector2(0.0, height)
+	FxRing.pop(at, body_radius * 0.5, body_radius * 4.5 * scale, c, 0.22)
+	var ring := FxRing.ground_pop(world_pos, body_radius, body_radius * 3.2 * scale, c, 0.26)
+	ring.width = 4.0
 
 
 ## The action's ground target, clamped to the skill's range and the arena.
@@ -628,6 +629,8 @@ func take_hit(amount: float, source: String = "") -> bool:
 	_hit_flash = 1.0
 	Events.shake_requested.emit(7.0)
 	Floater.spawn(at, "-%d %s" % [roundi(amount), source], Tune.COL_WARN, 20)
+	if hp <= 0.0:
+		Events.player_died.emit()
 	return true
 
 
@@ -638,8 +641,6 @@ func reset() -> void:
 	invuln = 0.0
 	act_lock = 0.0
 	act_idx = Tune.NO_ACTION
-	auto_step = 0
-	_auto_chain_timer = 0.0
 	identity = 0.0
 	overheat = 0.0
 	dash_charges = Tune.DASH_CHARGES

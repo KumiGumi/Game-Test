@@ -14,7 +14,7 @@ class_name Tune
 ##   AUTO      - right-click filler attack
 ##   SKILLS    - the 1-4 hotbar: 2 instants, 2 long casts
 ##   IDENTITY  - Overheat, the burst-window mode
-##   DUMMY     - practice target
+##   WARDEN    - the boss: FSM timings and per-pattern numbers
 ##   FEEL      - hitstop, shake, floaters
 ##   PALETTE   - colors
 
@@ -28,7 +28,7 @@ class_name Tune
 const VIEW_SQUASH := 0.58
 ## How far above its ground point a character's body is drawn.
 const PLAYER_HEIGHT := 26.0
-const DUMMY_HEIGHT := 46.0
+const WARDEN_HEIGHT := 74.0
 ## Projectiles fly at this height above the ground plane.
 const BOLT_HEIGHT := 30.0
 
@@ -142,31 +142,27 @@ const START_VARIANT := VARIANT_COMMIT
 # AUTO ATTACK - right mouse button
 # ============================================================================
 #
-# The filler. No cooldown, no resource, holdable. It exists to fill the space
-# between casts so the hands are never idle, and it's the main way the Overheat
-# meter fills. A 3-step chain so repetition has shape: the finisher hits wider
-# and harder.
+# The filler. One press, one shot. No cooldown, no resource, no chain - it
+# exists to fill the space between casts so the hands are never idle, and it is
+# the main way the Overheat meter charges.
 
 const AUTO := {
 	"name": "STAFF",
 	"kind": "auto",
-	## Per chain step. Array lengths define the chain length.
-	"cast_times": [0.24, 0.22, 0.30],
-	"damages": [46.0, 46.0, 88.0],
-	"staggers": [4.0, 4.0, 10.0],
-	## Step index (0-based) that becomes a small AoE instead of a single bolt.
-	"finisher_step": 2,
-	"finisher_radius": 92.0,
-	"recovery": 0.05,
+	"cast_time": 0.26,
+	"damage": 62.0,
+	"stagger": 5.0,
+	"recovery": 0.06,
 	## Autos let you drift - they should never feel like a full stop.
 	"move_mult": 0.45,
 	"bolt_speed": 1500.0,
 	"bolt_radius": 9.0,
-	"bolt_range": 620.0,
-	## Chain resets to step 0 after this long without an auto.
-	"chain_reset": 1.2,
+	"bolt_range": 640.0,
 	"color": Color(0.85, 0.90, 1.0),
 }
+
+## Holding RMB keeps firing. Set false for strictly one shot per click.
+const AUTO_HOLD_REPEAT := true
 
 
 # ============================================================================
@@ -202,6 +198,8 @@ const SKILLS := [
 		"impact_windup": 0.22,
 		"dmg_per_impact": 32.0,
 		"stagger_per_impact": 16.0,
+		## Visual only: the shard that flies from the player to each impact.
+		"shard_radius": 8.0,
 		"color": Color(0.55, 0.85, 1.0),
 	},
 	{   # 2 - INSTANT counter. Must be instant: you cannot cast into a window.
@@ -214,6 +212,9 @@ const SKILLS := [
 		"length": 200.0,
 		"half_width": 74.0,
 		"impact_windup": 0.05,
+		## How long the strike stays visible. Short enough to feel instant, long
+		## enough to actually see.
+		"flash_time": 0.20,
 		"damage": 80.0,
 		"stagger": 30.0,
 		## Landed inside a boss counter window: damage multiplier and stun.
@@ -277,14 +278,117 @@ const IDENTITY_DECAY := 0.0
 
 
 # ============================================================================
-# DUMMY TARGET (replaced by the Warden in step 2)
+# THE WARDEN - boss
+# ============================================================================
+#
+# Every attack runs WIND-UP -> ACTIVE -> RECOVERY. The wind-up is the whole
+# game: it must be long enough to read, short enough to threaten. Between
+# patterns the boss idles and repositions so the fight breathes instead of
+# being a continuous wall.
+
+const WARDEN_MAX_HP := 70000.0
+const WARDEN_RADIUS := 62.0
+const WARDEN_MOVE_SPEED := 155.0
+
+const WARDEN_STAGGER_MAX := 1000.0
+const WARDEN_STAGGER_DECAY := 45.0
+const WARDEN_STAGGER_RESET_DELAY := 2.0
+
+## The breathing beat between patterns.
+const WARDEN_IDLE_MIN := 0.45
+const WARDEN_IDLE_MAX := 1.00
+const WARDEN_RECOVER_MIN := 0.70
+const WARDEN_RECOVER_MAX := 1.30
+
+## Chance of drifting to a new spot before the next pattern, and how long it
+## may spend doing so. Repositioning is what stops the fight feeling static.
+const WARDEN_REPOSITION_CHANCE := 0.6
+const WARDEN_REPOSITION_MAX_TIME := 1.30
+## It aims to sit about this far from the player.
+const WARDEN_PREFERRED_DISTANCE := 280.0
+
+## Global multiplier on every wind-up. Phase 2 (step 4) drops this to ~0.85.
+const WARDEN_WINDUP_SCALE := 1.0
+
+## Never run the same pattern twice in a row if there's an alternative.
+const WARDEN_AVOID_REPEATS := true
+
+const COL_TELEGRAPH := Color(1.0, 0.32, 0.30)
+const COL_TELEGRAPH_ALT := Color(1.0, 0.55, 0.20)
+
+## Pattern indices. 5-7 arrive in steps 3 and 4.
+const P_CLEAVE := 0
+const P_PULSE := 1
+const P_RING := 2
+const P_LANCE := 3
+const P_SPIRAL := 4
+
+## Which patterns can be rolled. Phase 2 (step 4) appends to this pool.
+const WARDEN_POOL_PHASE1 := [P_CLEAVE, P_PULSE, P_RING, P_LANCE, P_SPIRAL]
+
+const WARDEN_PATTERNS := [
+	{   # 0 - frontal cone. Tracks you, then commits: the read is WHEN it locks.
+		"name": "CLEAVE",
+		"windup": 1.15,
+		"active": 0.14,
+		"radius": 400.0,
+		"half_angle": 50.0,
+		"damage": 190.0,
+		## Fraction of the wind-up spent tracking the player before locking.
+		"track_until": 0.50,
+	},
+	{   # 1 - point blank. Safe zone is OUTSIDE: run away.
+		"name": "PULSE",
+		"windup": 1.35,
+		"active": 0.16,
+		"radius": 300.0,
+		"damage": 210.0,
+	},
+	{   # 2 - ranged ring, the inverse of PULSE. Safe zone is AT MELEE: run in.
+		"name": "RING",
+		"windup": 1.35,
+		"active": 0.16,
+		"inner": 205.0,
+		"outer": 1400.0,
+		"damage": 210.0,
+	},
+	{   # 3 - dash along a telegraphed lane. Multi-hit, so the lane stays lethal
+		# for the whole dash rather than only on the frame it starts.
+		"name": "LANCE",
+		"windup": 1.20,
+		"active": 0.10,
+		"length": 950.0,
+		"half_width": 95.0,
+		"damage": 240.0,
+		"dash_time": 0.38,
+		"hits": 4,
+	},
+	{   # 4 - spiral of projectiles. The only pattern you solve by moving
+		# continuously rather than by standing in the right place.
+		"name": "SPIRAL",
+		"windup": 0.85,
+		"arms": 2,
+		"shots": 22,
+		"interval": 0.11,
+		"angle_step": 14.0,
+		"shot_speed": 330.0,
+		"shot_radius": 15.0,
+		"damage": 70.0,
+	},
+]
+
+## Boss projectiles despawn this far outside the arena.
+const SHOT_DESPAWN_PAD := 140.0
+const SHOT_HEIGHT := 34.0
+
+
+# ============================================================================
+# FAILURE
 # ============================================================================
 
-const DUMMY_RADIUS := 58.0
-const DUMMY_MAX_HP := 1000000.0
-const DUMMY_STAGGER_MAX := 1000.0
-const DUMMY_STAGGER_DECAY := 40.0
-const DUMMY_STAGGER_RESET_DELAY := 2.0
+## Player death restarts the run after this long. The real failure loop lands
+## in step 4 with the wipe mechanic.
+const DEATH_RESTART_DELAY := 1.60
 
 
 # ============================================================================
@@ -321,7 +425,8 @@ const COL_HILLS := Color(0.10, 0.10, 0.17)
 const COL_ARENA_FLOOR := Color(0.16, 0.17, 0.24)
 const COL_ARENA_EDGE := Color(0.42, 0.45, 0.58)
 const COL_PLAYER := Color(0.55, 0.88, 1.0)
-const COL_DUMMY := Color(0.60, 0.34, 0.42)
+const COL_WARDEN := Color(0.62, 0.33, 0.44)
+const COL_WARDEN_PHASE2 := Color(0.72, 0.28, 0.34)
 const COL_SHADOW := Color(0.0, 0.0, 0.0, 0.30)
 const COL_HP := Color(0.85, 0.25, 0.30)
 const COL_STAGGER := Color(1.0, 0.82, 0.30)
@@ -356,7 +461,7 @@ static func action(idx: int) -> Dictionary:
 static func cast_time(idx: int, variant_idx: int, overheated: bool = false) -> float:
 	var t: float
 	if idx == AUTO_ACTION:
-		t = float(AUTO["cast_times"][0])
+		t = float(AUTO["cast_time"])
 	else:
 		t = float(SKILLS[idx]["cast_time"])
 		if t > 0.0:

@@ -18,7 +18,7 @@ static var instance: Arena
 var ground: Node2D
 var actors: Node2D
 var player: Player
-var dummy: Dummy
+var warden: Warden
 var hud: Hud
 var camera: Camera2D
 
@@ -27,6 +27,7 @@ var elapsed: float = 0.0
 var _shake: float = 0.0
 var _base_time_scale: float = 1.0
 var _hitstop_active: bool = false
+var _restarting: bool = false
 
 
 func _ready() -> void:
@@ -47,10 +48,10 @@ func _ready() -> void:
 	View.ground = ground
 	View.actors = actors
 
-	dummy = Dummy.new()
-	dummy.name = "Dummy"
-	dummy.world_pos = Tune.ARENA_CENTER
-	actors.add_child(dummy)
+	warden = Warden.new()
+	warden.name = "Warden"
+	warden.world_pos = Tune.ARENA_CENTER
+	actors.add_child(warden)
 
 	player = Player.new()
 	player.name = "Player"
@@ -69,12 +70,32 @@ func _ready() -> void:
 	hud = Hud.new()
 	hud.name = "Hud"
 	hud.player = player
-	hud.dummy = dummy
+	hud.warden = warden
 	layer.add_child(hud)
+
+	_register_debug_actions()
 
 	Events.shake_requested.connect(_on_shake)
 	Events.hitstop_requested.connect(_on_hitstop)
 	Events.restart_requested.connect(restart)
+	Events.player_died.connect(_on_player_died)
+
+
+## Numpad 1-8 force the boss to run pattern N immediately, so a pattern can be
+## tested in isolation instead of waiting on the RNG. Registered here rather
+## than in project.godot so the keycodes come from the engine's own constants
+## and can't drift. The rest of the debug tooling lands in step 5.
+func _register_debug_actions() -> void:
+	var keys := [KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4,
+		KEY_KP_5, KEY_KP_6, KEY_KP_7, KEY_KP_8]
+	for i in range(keys.size()):
+		var action := "force_pattern_%d" % (i + 1)
+		if InputMap.has_action(action):
+			continue
+		InputMap.add_action(action)
+		var ev := InputEventKey.new()
+		ev.physical_keycode = keys[i]
+		InputMap.action_add_event(action, ev)
 
 
 func _player_spawn() -> Vector2:
@@ -99,6 +120,10 @@ func _process(delta: float) -> void:
 	if Input.is_action_just_pressed("restart"):
 		restart()
 
+	for i in range(Tune.WARDEN_PATTERNS.size()):
+		if Input.is_action_just_pressed("force_pattern_%d" % (i + 1)):
+			warden.force_pattern(i)
+
 	if _shake > 0.0:
 		_shake = maxf(0.0, _shake - Tune.SHAKE_DECAY * delta)
 		camera.offset = Vector2(randf_range(-_shake, _shake), randf_range(-_shake, _shake))
@@ -117,17 +142,28 @@ func restart() -> void:
 	for c in ground.get_children():
 		c.queue_free()
 	for c in actors.get_children():
-		if c != player and c != dummy:
+		if c != player and c != warden:
 			c.queue_free()
 
 	player.reset()
 	player.world_pos = _player_spawn()
 	player.sync_view()
-	dummy.reset()
+	warden.reset()
 	hud.reset()
 	elapsed = 0.0
 	_shake = 0.0
+	_restarting = false
 	camera.offset = Vector2.ZERO
+
+
+## Step 4 replaces this with the real failure loop; for now death just resets
+## the run so a bad pull costs a couple of seconds rather than a menu.
+func _on_player_died() -> void:
+	if _restarting:
+		return
+	_restarting = true
+	await get_tree().create_timer(Tune.DEATH_RESTART_DELAY, true, false, true).timeout
+	restart()
 
 
 func set_base_time_scale(s: float) -> void:
