@@ -12,15 +12,19 @@ Godot 4 / GDScript. Open the project folder in Godot and press F5.
 
 ---
 
-## Status: step 2 of 5
+## Status: step 3 of 5
 
 | # | Step | State |
 |---|------|-------|
 | 1 | Movement, dash i-frames, action economy, side-on view | **done** |
-| 2 | Boss state machine, patterns 1–5, telegraph system | **done** |
-| 3 | Counter (pattern 6) and stagger check (pattern 7) | not started |
-| 4 | Wipe mechanic (8), 50% phase change, enrage timer | not started |
+| 2 | Boss state machine, filler patterns, telegraph system | **done** |
+| 3 | Knockback + ledges, the counter, the stagger check | **done** |
+| 4 | Wipe mechanic, HP-gated mechanics, phase change, enrage | not started |
 | 5 | Full debug tooling pass | not started |
+
+**Not yet built:** four more filler combos (quad slam, enhanced axe strike with
+the glow/no-glow read, anchor, jump+cross), and the HP-threshold scheduler that
+should fire mechanics at fixed HP rather than rolling them from the pool.
 
 ## Controls
 
@@ -33,7 +37,9 @@ Godot 4 / GDScript. Open the project folder in Godot and press F5.
 | Space | dash |
 | **F** | Overheat |
 | Tab | switch variant |
-| **Numpad 1–6** | force boss pattern N (pulled forward from step 5) |
+| **Numpad 1–8** | force boss pattern N (pulled forward from step 5) |
+| **Numpad / and \*** | break the left / right platform |
+| **Numpad 0** | restore the floor |
 | F5 / Backspace | instant restart |
 
 ## The action economy
@@ -112,10 +118,56 @@ a fill that sweeps to tell you *when*.
 together they make range a decision you re-make every wind-up. 5 pushes the
 other way again — RING wants you at melee, CROSS wants you out in a gap.
 
+| 7 | SUNDER CHARGE | slams + lane | **the counter.** Three slams on a fixed beat, then a charge |
+| 8 | OVERBEAR | channel | **the stagger check.** Fill the bar or take a huge shove |
+
 **No bullet-hell patterns.** Every pattern is a placed ground shape with a
 wind-up, the way a Lost Ark boss actually works — not a projectile field you
 weave through. An earlier spiral-of-projectiles pattern was cut for exactly
 this reason.
+
+### One indicator, one verb
+
+The fight is meant to read like a rhythm game: *go in, get out, dodge, in then
+out, go behind, stand in a place.* So every pattern carries a `verb` in tuning —
+GO IN, GET OUT, FIND A GAP, GO BEHIND, COUNTER IT — and the HUD prints it under
+the boss bar while the wind-up runs. It is a design constraint as much as a
+readout: **if a pattern can't be named with one verb, the pattern is the
+problem.**
+
+### The counter
+
+Three slams on a fixed beat, then a charge down a lane he locked in before the
+first slam. The window opens on the **second** slam and only on his **front
+arc**, so the answer is to run into his face on beat two — the most committal
+movement in the fight, on a rhythm you have to learn. Land it and he's knocked
+down for 3s. Miss it and the charge shoves you the better part of a dash length,
+which near a broken ledge is death rather than damage.
+
+### The stagger check
+
+He channels for 6s; fill the bar or eat a ~300-unit shove. The bar does **not**
+decay during a check — the timer is the pressure, not leakage. It's tuned to
+want the big cast, so spending Starfall on filler a moment earlier is a real
+mistake rather than a rounding error.
+
+## Knockback, ledges and falling
+
+This is the fight's identity, not a detail: **everything he does pushes you, the
+stage is small, and once a platform breaks you can be shoved into the void.**
+
+- Every boss hit carries a knockback value, tuned in world units so it can be
+  compared against the 215-unit dash. A failed stagger check moves you ~300.
+- Knockback decays at a **constant** rate, so a push travels a finite, knowable
+  distance. (It was briefly exponential, which meant drifting toward the edge
+  forever — a genuinely bad property on a stage with ledges.)
+- Getting knocked out of a cast still costs you the cooldown. Being hit is not a
+  free reset.
+- The floor is two rects: `arena_rect` (outer bounds, nothing walks past) and
+  `floor_rect` (the solid part). A platform break shrinks the second, and the
+  gap between them is a hole. **i-frames don't save you** — they stop damage,
+  not gravity, which is what makes a ledge scarier than a hitbox.
+- Falling is lethal and restarts the run (`Tune.FALL_IS_LETHAL`).
 
 ### Patterns are coroutines
 
@@ -207,13 +259,16 @@ one-line bail.
 godot --headless --path . tests/smoke.tscn --quit-after 40000
 ```
 
-Exits non-zero on failure. 78 checks: `AtkShape` containment for all four
+Exits non-zero on failure. 137 checks: `AtkShape` containment for all four
 shapes, the view projection round-trip, one-press-one-shot autos, instants
 staying instant, the rain landing spread over its duration (not all at once),
 cast queuing outliving the input buffer, dash-cancel, i-frames, Overheat, the
 variant rules, multi-hit telegraph pulses, every boss pattern running to
 completion and releasing the FSM, **an aborted pattern's telegraph never going
-live**, PULSE hurting at melee while RING does not, boss death, and restart.
+live**, PULSE hurting at melee while RING does not, boss death, restart,
+knockback travelling a finite predicted distance, platform breaks, falling being
+lethal, the counter window being directional (front yes, behind no), and the
+stagger check not leaking.
 
 ```
 godot --headless --path . tests/dps_sim.tscn --quit-after 60000

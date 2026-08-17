@@ -98,13 +98,39 @@ func _register_debug_actions() -> void:
 	var keys := [KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5,
 		KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9]
 	for i in range(keys.size()):
-		var action := "force_pattern_%d" % (i + 1)
-		if InputMap.has_action(action):
-			continue
-		InputMap.add_action(action)
-		var ev := InputEventKey.new()
-		ev.physical_keycode = keys[i]
-		InputMap.action_add_event(action, ev)
+		_bind("force_pattern_%d" % (i + 1), keys[i])
+	# Platform breaks, so falling can be tested now. Step 4 hangs the real
+	# trigger on an HP threshold.
+	_bind("break_left", KEY_KP_DIVIDE)
+	_bind("break_right", KEY_KP_MULTIPLY)
+	_bind("restore_floor", KEY_KP_0)
+
+
+func _bind(action: String, key: Key) -> void:
+	if InputMap.has_action(action):
+		return
+	InputMap.add_action(action)
+	var ev := InputEventKey.new()
+	ev.physical_keycode = key
+	InputMap.action_add_event(action, ev)
+
+
+## Break away one side of the stage. Anyone standing there falls, which is the
+## whole reason the mechanic exists.
+func break_platform(dir: int) -> void:
+	Actor.break_platform(dir)
+	Events.shake_requested.emit(16.0)
+	Events.platform_broke.emit(dir)
+	# Shove the boss back onto solid ground; it does not fall.
+	warden.world_pos = _nearest_solid(warden.world_pos)
+
+
+func _nearest_solid(p: Vector2) -> Vector2:
+	var r := Actor.floor_rect
+	return Vector2(
+		clampf(p.x, r.position.x + 40.0, r.position.x + r.size.x - 40.0),
+		clampf(p.y, r.position.y + 40.0, r.position.y + r.size.y - 40.0)
+	)
 
 
 func _player_spawn() -> Vector2:
@@ -133,6 +159,13 @@ func _process(delta: float) -> void:
 		if Input.is_action_just_pressed("force_pattern_%d" % (i + 1)):
 			warden.force_pattern(i)
 
+	if Input.is_action_just_pressed("break_left"):
+		break_platform(-1)
+	if Input.is_action_just_pressed("break_right"):
+		break_platform(1)
+	if Input.is_action_just_pressed("restore_floor"):
+		Actor.reset_floor()
+
 	if _shake > 0.0:
 		_shake = maxf(0.0, _shake - Tune.SHAKE_DECAY * delta)
 		camera.offset = Vector2(randf_range(-_shake, _shake), randf_range(-_shake, _shake))
@@ -154,6 +187,7 @@ func restart() -> void:
 		if c != player and c != warden:
 			c.queue_free()
 
+	Actor.reset_floor()
 	player.reset()
 	player.world_pos = _player_spawn()
 	player.sync_view()

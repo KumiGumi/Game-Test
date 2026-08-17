@@ -69,6 +69,8 @@ func _draw() -> void:
 		return
 	_draw_readout()
 	_draw_boss_bar()
+	_draw_counter_prompt()
+	_draw_stagger_check()
 	_draw_variant_banner()
 	_draw_identity()
 	_draw_hotbar()
@@ -99,7 +101,7 @@ func _draw_readout() -> void:
 	_text(Vector2(x, y), "DAMAGE   %9.0f" % _total_damage, Tune.COL_TEXT_DIM)
 	y += line + 6.0
 
-	var st: String = ["FREE", "ACTING", "DASHING"][player.state]
+	var st: String = ["FREE", "ACTING", "DASHING", "FALLING", "DEAD"][player.state]
 	var st_col: Color = Tune.COL_TEXT_DIM if player.state == Player.State.FREE else Tune.COL_CASTBAR
 	_text(Vector2(x, y), "PLAYER    %s" % st, st_col)
 	y += line
@@ -125,6 +127,9 @@ func _draw_readout() -> void:
 		y += line
 		_text(Vector2(x, y), "  stagger   %d / %d" % [roundi(warden.stagger), roundi(Tune.WARDEN_STAGGER_MAX)],
 			Tune.COL_STAGGER)
+		y += line + 6.0
+		_text(Vector2(x, y), "FLOOR     %s" % ("BROKEN" if Actor.floor_is_broken() else "intact"),
+			Tune.COL_LEDGE if Actor.floor_is_broken() else Tune.COL_TEXT_DIM)
 
 
 ## Boss health across the top. Deliberately the widest element on screen: the
@@ -149,10 +154,47 @@ func _draw_boss_bar() -> void:
 	var tw := _font.get_string_size(hp_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
 	_text(pos + Vector2(w - tw, -5), hp_txt, Tune.COL_TEXT_DIM, 14)
 
-	# Name the pattern while it winds up - reading a telegraph is the skill, but
-	# knowing what it was called is how you talk about it while tuning.
+	# Name the pattern AND the movement it asks for. Every indicator in this
+	# fight should resolve to exactly one verb - go in, get out, find a gap. If a
+	# pattern can't be named with one, the pattern is the problem.
 	if warden.current_pattern >= 0:
-		_text_center(vp.x * 0.5, pos.y + h + 18.0, warden.pattern_name(), Tune.COL_TELEGRAPH, 18)
+		var pat: Dictionary = Tune.WARDEN_PATTERNS[warden.current_pattern]
+		_text_center(vp.x * 0.5, pos.y + h + 16.0, String(pat["name"]), Tune.COL_TELEGRAPH, 17)
+		_text_center(vp.x * 0.5, pos.y + h + 38.0, String(pat["verb"]), Tune.COL_TEXT, 26)
+
+
+## The counter window. Deliberately loud: the whole mechanic is "see it, run
+## into his face, press 2", and a subtle cue makes that a memory test instead
+## of a reaction.
+func _draw_counter_prompt() -> void:
+	if warden == null or not is_instance_valid(warden) or not warden.counter_open:
+		return
+	var vp := _vp()
+	var pulse := 0.5 + 0.5 * sin(elapsed * 20.0)
+	_text_center(vp.x * 0.5, vp.y * 0.5 - 90.0, "COUNTER  [2]",
+		Tune.COL_COUNTER.lerp(Color.WHITE, pulse), 44)
+	_text_center(vp.x * 0.5, vp.y * 0.5 - 62.0, "hit him from the FRONT", Tune.COL_TEXT, 16)
+
+
+## The stagger check: a bar and a clock, both big. Failing is a huge knockback,
+## and near a broken ledge that is simply death.
+func _draw_stagger_check() -> void:
+	if warden == null or not is_instance_valid(warden) or not warden.stagger_check:
+		return
+	var vp := _vp()
+	var w := 560.0
+	var h := 26.0
+	var pos := Vector2(vp.x * 0.5 - w * 0.5, 150.0)
+	var f := clampf(warden.stagger / maxf(warden.stagger_required, 1.0), 0.0, 1.0)
+
+	draw_rect(Rect2(pos, Vector2(w, h)), Color(0, 0, 0, 0.8))
+	draw_rect(Rect2(pos, Vector2(w * f, h)), Tune.COL_STAGGER)
+	draw_rect(Rect2(pos, Vector2(w, h)), Color(1, 1, 1, 0.5), false, 2.0)
+	_text_center(vp.x * 0.5, pos.y - 8.0, "STAGGER HIM", Tune.COL_STAGGER, 24)
+	_text_center(vp.x * 0.5, pos.y + h + 22.0,
+		"%.1fs    %d / %d" % [maxf(warden.stagger_left, 0.0),
+			roundi(warden.stagger), roundi(warden.stagger_required)],
+		Tune.COL_TEXT if warden.stagger_left > 1.5 else Tune.COL_WARN, 20)
 
 
 func _draw_variant_banner() -> void:

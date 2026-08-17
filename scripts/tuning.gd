@@ -46,9 +46,44 @@ const Z_TELEGRAPH := -5
 # ============================================================================
 
 const ARENA_CENTER := Vector2(800.0, 965.0)
-## Half-extents. The arena is a rectangle; it projects to a wide, shallow stage.
-const ARENA_HALF := Vector2(560.0, 350.0)
+## Half-extents. Deliberately SMALL. Claustrophobia is the point: a stage you
+## can cross in a couple of dashes makes every knockback a threat and every
+## "get out" a real decision rather than a stroll.
+const ARENA_HALF := Vector2(440.0, 275.0)
 const ARENA_EDGE_PAD := 12.0
+
+## --- Ledges and falling ---------------------------------------------------
+## THE fight's identity: everything the boss does knocks you back, the stage is
+## small, and once a platform breaks you can be knocked into the void. The fear
+## of falling is the mechanic; the damage is incidental.
+##
+## Falling is lethal. Set false to make it a heavy hit and a respawn instead -
+## survivable while learning a pattern, but the fear goes with it.
+const FALL_IS_LETHAL := true
+const FALL_DAMAGE_IF_NOT_LETHAL := 400.0
+## Seconds of sinking before the fall resolves. Pure drama.
+const FALL_DURATION := 0.85
+
+## Fraction of the arena width removed when a platform breaks.
+const PLATFORM_BREAK_FRACTION := 0.42
+
+
+# ============================================================================
+# KNOCKBACK
+# ============================================================================
+#
+# Every boss hit pushes. Per-pattern values live with the patterns; these
+# control how the push behaves once applied.
+
+## Seconds for the knockback impulse to decay to nothing, at a constant rate.
+## Distance pushed = knockback_value * this / 2, so the per-pattern numbers
+## below translate directly into world units. The dash covers 215 for scale.
+const KNOCKBACK_DECAY_TIME := 0.45
+## Seconds the player cannot act after being knocked. Short - being unable to
+## respond is frustrating, being unable to respond INSTANTLY is tension.
+const KNOCKBACK_ACTION_LOCK := 0.16
+## Knockback is a velocity impulse in world units/sec.
+const KNOCKBACK_MIN_TO_LOCK := 120.0
 
 ## Screen y the camera centres on. Tune to trade sky for floor.
 const CAMERA_SCREEN_Y := 470.0
@@ -322,6 +357,8 @@ const WARDEN_WINDUP_SCALE := 1.0
 const WARDEN_AVOID_REPEATS := true
 
 const COL_TELEGRAPH := Color(1.0, 0.32, 0.30)
+## The counter window. Must be unmistakable at a glance.
+const COL_COUNTER := Color(0.35, 0.72, 1.0)
 const COL_TELEGRAPH_ALT := Color(1.0, 0.55, 0.20)
 
 ## Pattern indices. 5-7 arrive in steps 3 and 4.
@@ -331,66 +368,82 @@ const P_RING := 2
 const P_LANCE := 3
 const P_CROSS := 4
 const P_TRIPLE := 5
+const P_COUNTER := 6
+const P_STAGGER := 7
 
 ## Which patterns can be rolled. Phase 2 (step 4) appends to this pool.
-const WARDEN_POOL_PHASE1 := [P_CLEAVE, P_PULSE, P_RING, P_LANCE, P_CROSS, P_TRIPLE]
+## Filler combos, rolled at random between mechanics. In the source game the
+## boss spams these; the scripted mechanics are HP-gated and land on top.
+const WARDEN_POOL_PHASE1 := [P_CLEAVE, P_PULSE, P_RING, P_LANCE, P_CROSS, P_TRIPLE,
+	P_COUNTER, P_STAGGER]
 
 const WARDEN_PATTERNS := [
 	{   # 0 - frontal cone. Tracks you, then commits: the read is WHEN it locks.
 		"name": "CLEAVE",
+		"verb": "GO BEHIND",
 		"windup": 1.15,
 		"active": 0.14,
 		"radius": 400.0,
 		"half_angle": 50.0,
 		"damage": 190.0,
+		"knockback": 400.0,   # ~90 units
 		## Fraction of the wind-up spent tracking the player before locking.
 		"track_until": 0.50,
 	},
-	{   # 1 - point blank. Safe zone is OUTSIDE: run away.
+	{   # 1 - point blank. Safe zone is OUTSIDE.
 		"name": "PULSE",
+		"verb": "GET OUT",
 		"windup": 1.35,
 		"active": 0.16,
-		"radius": 300.0,
+		"radius": 265.0,
 		"damage": 210.0,
+		"knockback": 580.0,   # ~130 units - PULSE should shove you well clear
 	},
-	{   # 2 - ranged ring, the inverse of PULSE. Safe zone is AT MELEE: run in.
+	{   # 2 - ranged ring, the inverse of PULSE. Safe zone is AT MELEE.
 		"name": "RING",
+		"verb": "GO IN",
 		"windup": 1.35,
 		"active": 0.16,
-		"inner": 205.0,
+		"inner": 175.0,
 		"outer": 1400.0,
 		"damage": 210.0,
+		"knockback": 445.0,   # ~100 units
 	},
 	{   # 3 - dash along a telegraphed lane. Multi-hit, so the lane stays lethal
-		# for the whole dash rather than only on the frame it starts.
+		# for the whole dash rather than only on the frame it goes live.
 		"name": "LANCE",
+		"verb": "GET OUT OF THE LANE",
 		"windup": 1.20,
 		"active": 0.10,
 		"length": 950.0,
 		"half_width": 95.0,
 		"damage": 240.0,
+		"knockback": 670.0,   # ~150 units
 		"dash_time": 0.38,
 		"hits": 4,
 	},
-	{   # 4 - axe slam into an X of shockwaves. The arms cover the diagonals, so
-		# the gaps are the four cardinal directions - including straight out to
-		# the boss's left and right. Melee range is inside every arm, which is
-		# what makes this the opposite problem to RING.
+	{   # 4 - axe raised, slammed down in FRONT of him, throwing a cross of
+		# shockwaves out from the impact point. Dodge into a gap.
 		"name": "CROSS",
+		"verb": "FIND A GAP",
 		"windup": 1.30,
 		"active": 0.16,
 		"arms": 4,
 		## Rotation of the first arm away from the boss's facing. 45 gives an X
 		## with cardinal gaps; 0 gives a + with diagonal gaps.
 		"arm_offset": 45.0,
-		"length": 900.0,
-		"half_width": 105.0,
+		## How far in front of the boss the axe lands. The cross radiates from
+		## there, not from his feet.
+		"impact_offset": 165.0,
+		"length": 820.0,
+		"half_width": 95.0,
 		"damage": 200.0,
+		"knockback": 510.0,   # ~115 units
 	},
-	{   # 5 - three-swing sequence: front, behind, front. One pattern with three
-		# beats, so it is answered by moving twice rather than standing still
-		# once. The second swing catches anyone who rolled straight through.
+	{   # 5 - three swings: front, behind, front. The shockwave goes out on
+		# whichever side the axe landed, so it is answered by moving twice.
 		"name": "TRIPLE SWING",
+		"verb": "IN, OUT, IN",
 		"windup": 0.95,
 		## Later swings wind up faster - the sequence accelerates.
 		"windup_rest": 0.55,
@@ -399,11 +452,61 @@ const WARDEN_PATTERNS := [
 		"radius": 340.0,
 		"half_angle": 55.0,
 		"damage": 150.0,
-		## Re-aim at the player before every swing instead of committing to the
-		## facing at the start. Much harsher - off by default.
+		"knockback": 355.0,   # ~80 units
+		## Re-aim before every swing instead of committing at the start. Much
+		## harsher - off by default.
 		"retarget_each": false,
 	},
+	{   # 6 - THE COUNTER. He plants, aims, slams three times, then charges.
+		# The window is on the SECOND slam and only from the front, so the
+		# answer is "run into his face on the second beat" - the most committal
+		# movement in the fight, on a rhythm you have to learn.
+		"name": "SUNDER CHARGE",
+		"verb": "COUNTER IT",
+		"windup": 0.55,
+		"active": 0.12,
+		"slams": 3,
+		"slam_radius": 155.0,
+		"slam_offset": 125.0,
+		"slam_damage": 110.0,
+		"slam_knockback": 310.0,   # ~70 units
+		## 0-based slam index that opens the counter window.
+		"counter_on_slam": 1,
+		## How long the window stays open, and how far off his facing a counter
+		## may land and still connect (degrees either side).
+		"counter_window": 0.90,
+		"counter_front_arc": 85.0,
+		## Beat between slams.
+		"slam_gap": 0.18,
+		## The charge, if you fail to counter it.
+		"charge_windup": 0.45,
+		"charge_length": 950.0,
+		"charge_half_width": 92.0,
+		"charge_time": 0.55,
+		"charge_damage": 300.0,
+		"charge_knockback": 850.0,   # ~190 units, most of a dash
+		## Landing the counter knocks him down for this long.
+		"countered_stun": 3.0,
+	},
+	{   # 7 - THE STAGGER CHECK. He channels; fill the bar before the timer or
+		# eat a huge knockback - which near a broken ledge is simply death.
+		# Tuned to be just barely soloable: it wants the big cast, so using it
+		# early on filler is a real mistake.
+		"name": "OVERBEAR",
+		"verb": "STAGGER HIM",
+		"windup": 6.0,
+		"active": 0.20,
+		"required": 380.0,
+		"radius": 1400.0,
+		"fail_damage": 260.0,
+		"fail_knockback": 1330.0,   # ~300 units. Near a ledge this is death.
+		## How long he is helpless after a successful stagger.
+		"success_stun": 4.0,
+		"damage": 0.0,
+		"knockback": 0.0,
+	},
 ]
+
 
 
 # ============================================================================
@@ -448,6 +551,9 @@ const COL_SKY_BOTTOM := Color(0.30, 0.28, 0.44)
 const COL_HILLS := Color(0.10, 0.10, 0.17)
 const COL_ARENA_FLOOR := Color(0.16, 0.17, 0.24)
 const COL_ARENA_EDGE := Color(0.42, 0.45, 0.58)
+## The hole where the stage used to be, and the edge that kills.
+const COL_VOID := Color(0.03, 0.03, 0.05)
+const COL_LEDGE := Color(1.0, 0.45, 0.25)
 const COL_PLAYER := Color(0.55, 0.88, 1.0)
 const COL_WARDEN := Color(0.62, 0.33, 0.44)
 const COL_WARDEN_PHASE2 := Color(0.72, 0.28, 0.34)

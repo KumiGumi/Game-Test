@@ -11,8 +11,20 @@ extends Node2D
 ## its own node lets the root sit at z 0 and every layer state its depth
 ## honestly.
 
+var _last_floor: Rect2
+
+
 func _ready() -> void:
 	z_index = Tune.Z_BACKDROP
+	_last_floor = Actor.floor_rect
+
+
+func _process(_delta: float) -> void:
+	# The floor only changes when a platform breaks, so redraw on change rather
+	# than every frame.
+	if Actor.floor_rect != _last_floor:
+		_last_floor = Actor.floor_rect
+		queue_redraw()
 
 
 func _draw() -> void:
@@ -61,23 +73,29 @@ func _draw_hills() -> void:
 
 
 func _draw_stage() -> void:
-	var c := Tune.ARENA_CENTER
-	var hs := Tune.ARENA_HALF
-	var tl := View.to_screen(c - hs)
-	var br := View.to_screen(c + hs)
+	var full := Actor.arena_rect()
+	var live := Actor.floor_rect
+	var tl := View.to_screen(live.position)
+	var br := View.to_screen(live.position + live.size)
 	var rect := Rect2(tl, br - tl)
+
+	# The void first: whatever the arena used to cover and no longer does.
+	if Actor.floor_is_broken():
+		var vtl := View.to_screen(full.position)
+		var vbr := View.to_screen(full.position + full.size)
+		draw_rect(Rect2(vtl, vbr - vtl), Tune.COL_VOID)
 
 	draw_rect(rect, Tune.COL_ARENA_FLOOR)
 
 	# Grid on the floor. Judging distance is most of what the boss patterns ask
 	# of you, and a flat plane with no reference points makes that guesswork.
 	var step := 140.0
-	var x := c.x - hs.x + step
-	while x < c.x + hs.x:
+	var x := live.position.x + step
+	while x < live.position.x + live.size.x:
 		draw_line(Vector2(x, tl.y), Vector2(x, br.y), Color(1, 1, 1, 0.04), 1.0)
 		x += step
-	var y := c.y - hs.y + step
-	while y < c.y + hs.y:
+	var y := live.position.y + step
+	while y < live.position.y + live.size.y:
 		var sy := View.to_screen(Vector2(0.0, y)).y
 		draw_line(Vector2(tl.x, sy), Vector2(br.x, sy), Color(1, 1, 1, 0.04), 1.0)
 		y += step
@@ -85,3 +103,10 @@ func _draw_stage() -> void:
 	draw_rect(rect, Tune.COL_ARENA_EDGE, false, 3.0)
 	# Front lip: a brighter near edge reads as the stage coming toward you.
 	draw_line(Vector2(tl.x, br.y), Vector2(br.x, br.y), Color(1, 1, 1, 0.18), 4.0)
+
+	# Broken edges get a hot warning line. This is the one boundary that kills.
+	if Actor.floor_is_broken():
+		for edge_x in [tl.x, br.x]:
+			if absf(edge_x - View.to_screen(full.position).x) > 2.0 \
+					and absf(edge_x - View.to_screen(full.position + full.size).x) > 2.0:
+				draw_line(Vector2(edge_x, tl.y), Vector2(edge_x, br.y), Tune.COL_LEDGE, 5.0)

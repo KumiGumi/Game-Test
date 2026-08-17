@@ -17,7 +17,7 @@ extends Actor
 ## alike - they differ only in how long they hold you and what they cost to
 ## break out of.
 
-enum State { FREE, ACTING, DASHING }
+enum State { FREE, ACTING, DASHING, FALLING, DEAD }
 
 ## The boss needs to find the player without the Arena brokering it, and the
 ## player never references the boss, so this stays acyclic.
@@ -73,6 +73,15 @@ var _buf_time: float = 0.0
 var _hit_flash: float = 0.0
 var _pulse: float = 0.0
 
+## Knockback impulse, world units/sec. Decays at a CONSTANT rate set when it is
+## applied, so a push travels a finite, predictable distance and stops.
+## Decaying by a rate recomputed from the current speed each frame gives an
+## exponential tail that never terminates - which on a stage with ledges means
+## drifting toward the edge forever.
+var knockback: Vector2 = Vector2.ZERO
+var _knockback_rate: float = 0.0
+var _fall_time: float = 0.0
+
 ## Debug hook: when active, this replaces the cursor as the aim source. Used by
 ## the headless tests, and by the step-5 tooling to fire skills at a fixed spot.
 var aim_override_active: bool = false
@@ -123,6 +132,12 @@ func is_casting() -> bool:
 # ---------------------------------------------------------------------------
 
 func _process(delta: float) -> void:
+	if state == State.FALLING:
+		_state_falling(delta)
+		return
+	if state == State.DEAD:
+		return
+
 	_tick_timers(delta)
 	_read_input()
 
@@ -135,12 +150,50 @@ func _process(delta: float) -> void:
 			_state_dashing(delta)
 
 	_apply_motion(delta)
+	_check_floor()
 	sync_view()
 	queue_redraw()
 
 
+## Off the edge is off the edge. Dashing does not save you - i-frames stop
+## damage, not gravity - which is what makes a ledge scarier than a hitbox.
+func _check_floor() -> void:
+	if Actor.on_floor(world_pos):
+		return
+	state = State.FALLING
+	_fall_time = 0.0
+	velocity = Vector2.ZERO
+	knockback = Vector2.ZERO
+	Events.player_fell.emit()
+	Floater.spawn(View.to_screen(world_pos) - Vector2(0, height + 40.0), "FALLING", Tune.COL_WARN, 26, 1.0)
+
+
+func _state_falling(delta: float) -> void:
+	_fall_time += delta
+	# Sink out of frame, then resolve.
+	height -= (Tune.PLAYER_HEIGHT + 260.0) * (delta / maxf(Tune.FALL_DURATION, 0.01))
+	sync_view()
+	queue_redraw()
+	if _fall_time < Tune.FALL_DURATION:
+		return
+	if Tune.FALL_IS_LETHAL:
+		hp = 0.0
+		state = State.DEAD
+		Events.player_died.emit()
+	else:
+		hp = maxf(0.0, hp - Tune.FALL_DAMAGE_IF_NOT_LETHAL)
+		height = Tune.PLAYER_HEIGHT
+		world_pos = Actor.floor_rect.get_center()
+		state = State.FREE
+		invuln = maxf(invuln, 1.0)
+		if hp <= 0.0:
+			Events.player_died.emit()
+
+
 func _tick_timers(delta: float) -> void:
 	_pulse += delta
+	if _knockback_rate > 0.0 and knockback != Vector2.ZERO:
+		knockback = knockback.move_toward(Vector2.ZERO, _knockback_rate * delta)
 	act_lock = maxf(0.0, act_lock - delta)
 	invuln = maxf(0.0, invuln - delta)
 	_hit_flash = maxf(0.0, _hit_flash - delta * 5.0)
@@ -451,7 +504,7 @@ func _resolve_counter(shape: AtkShape, s: Dictionary, mult: float, idx: int) -> 
 		if not shape.overlaps_circle(h.world_pos, h.body_radius):
 			continue
 		any = true
-		if h.counter_window_open():
+		if h.counter_window_open() and h.counter_reachable_from(world_pos):
 			landed = true
 			h.apply_hit(base * float(s["counter_damage_mult"]), stag, idx, true)
 			h.on_countered(float(s["counter_stun"]))
@@ -605,7 +658,7 @@ func _apply_motion(delta: float) -> void:
 		var t := Tune.PLAYER_ACCEL_TIME if speeding_up else Tune.PLAYER_DECEL_TIME
 		velocity = velocity.move_toward(target, (Tune.PLAYER_MOVE_SPEED / maxf(t, 0.0005)) * delta)
 
-	world_pos += velocity * delta
+	world_pos += (velocity + knockback) * delta
 	var clamped := Actor.clamp_to_arena(world_pos)
 	if clamped.x != world_pos.x:
 		velocity.x = 0.0
@@ -618,7 +671,11 @@ func _apply_motion(delta: float) -> void:
 # DAMAGE
 # ---------------------------------------------------------------------------
 
-func take_hit(amount: float, source: String = "") -> bool:
+## `from` is where the blow came from; knockback pushes directly away from it.
+func take_hit(amount: float, source: String = "", from: Vector2 = Vector2.INF,
+		knock: float = 0.0) -> bool:
+	if state == State.FALLING or state == State.DEAD:
+		return false
 	var avoided := invuln > 0.0 or god_mode
 	Events.player_hit.emit(amount, world_pos, avoided)
 	var at := View.to_screen(world_pos) - Vector2(0, height + 34.0)
@@ -629,6 +686,24 @@ func take_hit(amount: float, source: String = "") -> bool:
 	_hit_flash = 1.0
 	Events.shake_requested.emit(7.0)
 	Floater.spawn(at, "-%d %s" % [roundi(amount), source], Tune.COL_WARN, 20)
+
+	if knock > 0.0:
+		var dir := Vector2.ZERO
+		if from != Vector2.INF:
+			dir = world_pos - from
+		if dir.length_squared() < 1.0:
+			dir = -facing
+		knockback = dir.normalized() * knock
+		# Constant rate: reaches zero exactly at KNOCKBACK_DECAY_TIME, so the
+		# distance travelled is knock * time / 2 and is fully predictable.
+		_knockback_rate = knock / maxf(Tune.KNOCKBACK_DECAY_TIME, 0.001)
+		if knock >= Tune.KNOCKBACK_MIN_TO_LOCK:
+			act_lock = maxf(act_lock, Tune.KNOCKBACK_ACTION_LOCK)
+			# Being shoved out of a cast costs the cooldown, same as bailing on
+			# it yourself. Getting hit is not a free reset.
+			if is_casting():
+				_cancel_action()
+
 	if hp <= 0.0:
 		Events.player_died.emit()
 	return true
@@ -637,6 +712,10 @@ func take_hit(amount: float, source: String = "") -> bool:
 func reset() -> void:
 	hp = Tune.PLAYER_MAX_HP
 	state = State.FREE
+	knockback = Vector2.ZERO
+	_knockback_rate = 0.0
+	height = Tune.PLAYER_HEIGHT
+	_fall_time = 0.0
 	velocity = Vector2.ZERO
 	invuln = 0.0
 	act_lock = 0.0
