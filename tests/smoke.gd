@@ -48,6 +48,8 @@ func _ready() -> void:
 	warden = arena.warden
 	print("--- boot ok, player %s, warden %s" % [player.world_pos, warden.world_pos])
 
+	_test_layers()
+
 	# Park the boss while the player's own kit is under test.
 	warden.process_mode = Node.PROCESS_MODE_DISABLED
 	player.god_mode = true
@@ -99,6 +101,35 @@ func _test_view() -> void:
 	_check("view round-trips", View.to_world(s).is_equal_approx(w))
 	_check("arena clamp keeps inside", Actor.in_arena(
 		Actor.clamp_to_arena(Tune.ARENA_CENTER + Vector2(9999, 9999))))
+
+
+## Godot resolves z_index relative to the parent unless z_as_relative is off,
+## so the number on a node is not the number it draws at. This walks the chain
+## the same way the renderer does.
+func _effective_z(ci: CanvasItem) -> int:
+	var z := ci.z_index
+	if ci.z_as_relative:
+		var parent := ci.get_parent()
+		if parent is CanvasItem:
+			z += _effective_z(parent as CanvasItem)
+	return z
+
+
+## Regression: the ground layer once sat below the backdrop because the root
+## carried a low z_index that dragged its children down with it, so every AoE
+## indicator was painted underneath the floor.
+func _test_layers() -> void:
+	var back := _effective_z(arena.backdrop)
+	var ground := _effective_z(arena.ground)
+	var actors := _effective_z(arena.actors)
+	var tg := Telegraph.spawn(AtkShape.circle(Tune.ARENA_CENTER, 50.0), 5.0, 0.05, Color.RED)
+	var tele := _effective_z(tg)
+	print("--- effective z: backdrop %d, ground %d, telegraph %d, actors %d"
+		% [back, ground, tele, actors])
+	_check("ground draws above the backdrop", ground > back)
+	_check("telegraphs draw above the floor", tele > back)
+	_check("actors draw above telegraphs", actors > tele)
+	tg.queue_free()
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +285,8 @@ func _test_warden() -> void:
 		t.activated.connect(func(_s: AtkShape, _x: Telegraph) -> void:
 			set_meta("aborted_fired", int(get_meta("aborted_fired")) + 1))
 	# Cut it off well before its wind-up would have completed.
-	warden.force_pattern(Tune.P_SPIRAL)
-	_check("forcing a pattern switches immediately", warden.current_pattern == Tune.P_SPIRAL)
+	warden.force_pattern(Tune.P_TRIPLE)
+	_check("forcing a pattern switches immediately", warden.current_pattern == Tune.P_TRIPLE)
 	await _sleep(2.0)
 	_check("aborted telegraph never went live", int(get_meta("aborted_fired")) == 0)
 	warden._abort()

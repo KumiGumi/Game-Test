@@ -33,6 +33,14 @@ const WARDEN_HEIGHT := 74.0
 const BOLT_HEIGHT := 30.0
 
 
+## LAYER DEPTHS. z_index is RELATIVE to the parent in Godot, so every layer is
+## a direct child of a root sitting at z 0 and states its depth here. Getting
+## this wrong is how telegraphs end up painted underneath the floor.
+const Z_BACKDROP := -100
+const Z_GROUND := -10
+const Z_TELEGRAPH := -5
+
+
 # ============================================================================
 # ARENA - world space, flat 2D. y is DEPTH, not height.
 # ============================================================================
@@ -321,10 +329,11 @@ const P_CLEAVE := 0
 const P_PULSE := 1
 const P_RING := 2
 const P_LANCE := 3
-const P_SPIRAL := 4
+const P_CROSS := 4
+const P_TRIPLE := 5
 
 ## Which patterns can be rolled. Phase 2 (step 4) appends to this pool.
-const WARDEN_POOL_PHASE1 := [P_CLEAVE, P_PULSE, P_RING, P_LANCE, P_SPIRAL]
+const WARDEN_POOL_PHASE1 := [P_CLEAVE, P_PULSE, P_RING, P_LANCE, P_CROSS, P_TRIPLE]
 
 const WARDEN_PATTERNS := [
 	{   # 0 - frontal cone. Tracks you, then commits: the read is WHEN it locks.
@@ -363,23 +372,38 @@ const WARDEN_PATTERNS := [
 		"dash_time": 0.38,
 		"hits": 4,
 	},
-	{   # 4 - spiral of projectiles. The only pattern you solve by moving
-		# continuously rather than by standing in the right place.
-		"name": "SPIRAL",
-		"windup": 0.85,
-		"arms": 2,
-		"shots": 22,
-		"interval": 0.11,
-		"angle_step": 14.0,
-		"shot_speed": 330.0,
-		"shot_radius": 15.0,
-		"damage": 70.0,
+	{   # 4 - axe slam into an X of shockwaves. The arms cover the diagonals, so
+		# the gaps are the four cardinal directions - including straight out to
+		# the boss's left and right. Melee range is inside every arm, which is
+		# what makes this the opposite problem to RING.
+		"name": "CROSS",
+		"windup": 1.30,
+		"active": 0.16,
+		"arms": 4,
+		## Rotation of the first arm away from the boss's facing. 45 gives an X
+		## with cardinal gaps; 0 gives a + with diagonal gaps.
+		"arm_offset": 45.0,
+		"length": 900.0,
+		"half_width": 105.0,
+		"damage": 200.0,
+	},
+	{   # 5 - three-swing sequence: front, behind, front. One pattern with three
+		# beats, so it is answered by moving twice rather than standing still
+		# once. The second swing catches anyone who rolled straight through.
+		"name": "TRIPLE SWING",
+		"windup": 0.95,
+		## Later swings wind up faster - the sequence accelerates.
+		"windup_rest": 0.55,
+		"active": 0.14,
+		"swings": 3,
+		"radius": 340.0,
+		"half_angle": 55.0,
+		"damage": 150.0,
+		## Re-aim at the player before every swing instead of committing to the
+		## facing at the start. Much harsher - off by default.
+		"retarget_each": false,
 	},
 ]
-
-## Boss projectiles despawn this far outside the arena.
-const SHOT_DESPAWN_PAD := 140.0
-const SHOT_HEIGHT := 34.0
 
 
 # ============================================================================

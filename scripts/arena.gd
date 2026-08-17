@@ -6,7 +6,8 @@ extends Node2D
 ##
 ## Owns the layer split that makes the side-on view work:
 ##
-##   backdrop  - drawn here, in screen space (sky, hills, the stage floor)
+##   backdrop  - screen space: sky, hills, the stage floor. Its own node, so
+##               the root can sit at z 0 (see _ready).
 ##   ground    - scaled (1, VIEW_SQUASH). Telegraphs live here, so a circle
 ##               becomes a ground ellipse with no per-shape work.
 ##   actors    - unscaled. Characters, projectiles, numbers - upright.
@@ -15,6 +16,7 @@ extends Node2D
 
 static var instance: Arena
 
+var backdrop: Backdrop
 var ground: Node2D
 var actors: Node2D
 var player: Player
@@ -32,12 +34,19 @@ var _restarting: bool = false
 
 func _ready() -> void:
 	instance = self
-	z_index = -100
+	# The root stays at z 0. z_index is RELATIVE to the parent, so a root with a
+	# low z drags every layer below it down with it - which is how telegraphs
+	# ended up painted underneath the floor. Each layer states its own depth.
+	z_index = 0
+
+	backdrop = Backdrop.new()
+	backdrop.name = "Backdrop"
+	add_child(backdrop)
 
 	ground = Node2D.new()
 	ground.name = "Ground"
 	ground.scale = Vector2(1.0, Tune.VIEW_SQUASH)
-	ground.z_index = -10
+	ground.z_index = Tune.Z_GROUND
 	add_child(ground)
 
 	actors = Node2D.new()
@@ -86,8 +95,8 @@ func _ready() -> void:
 ## than in project.godot so the keycodes come from the engine's own constants
 ## and can't drift. The rest of the debug tooling lands in step 5.
 func _register_debug_actions() -> void:
-	var keys := [KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4,
-		KEY_KP_5, KEY_KP_6, KEY_KP_7, KEY_KP_8]
+	var keys := [KEY_KP_1, KEY_KP_2, KEY_KP_3, KEY_KP_4, KEY_KP_5,
+		KEY_KP_6, KEY_KP_7, KEY_KP_8, KEY_KP_9]
 	for i in range(keys.size()):
 		var action := "force_pattern_%d" % (i + 1)
 		if InputMap.has_action(action):
@@ -185,79 +194,3 @@ func _on_hitstop(duration: float) -> void:
 	await get_tree().create_timer(duration, true, false, true).timeout
 	Engine.time_scale = _base_time_scale
 	_hitstop_active = false
-
-
-# ---------------------------------------------------------------------------
-# BACKDROP - screen space. The camera is static, so this can be drawn flat.
-# ---------------------------------------------------------------------------
-
-func _draw() -> void:
-	_draw_sky()
-	_draw_hills()
-	_draw_stage()
-
-
-func _draw_sky() -> void:
-	# Wide enough to cover the viewport regardless of aspect.
-	var left := Tune.ARENA_CENTER.x - 1400.0
-	var w := 2800.0
-	var top := -400.0
-	var bottom := View.to_screen(Tune.ARENA_CENTER + Tune.ARENA_HALF).y
-	var bands := 24
-	for i in range(bands):
-		var f0 := float(i) / float(bands)
-		var f1 := float(i + 1) / float(bands)
-		var y0 := lerpf(top, bottom, f0)
-		var y1 := lerpf(top, bottom, f1)
-		draw_rect(Rect2(Vector2(left, y0), Vector2(w, y1 - y0 + 1.0)),
-			Tune.COL_SKY_TOP.lerp(Tune.COL_SKY_BOTTOM, f0))
-
-	# Moon, well off to one side so it doesn't sit behind the fight.
-	var horizon := View.to_screen(Tune.ARENA_CENTER - Tune.ARENA_HALF).y
-	draw_circle(Vector2(Tune.ARENA_CENTER.x + 470.0, horizon - 250.0), 46.0, Color(0.92, 0.93, 1.0, 0.85))
-	draw_circle(Vector2(Tune.ARENA_CENTER.x + 470.0, horizon - 250.0), 70.0, Color(0.92, 0.93, 1.0, 0.06))
-
-
-func _draw_hills() -> void:
-	var horizon := View.to_screen(Tune.ARENA_CENTER - Tune.ARENA_HALF).y
-	var cx := Tune.ARENA_CENTER.x
-	# Two silhouette bands. Flat shapes only - this is scenery, not art.
-	var peaks := [
-		[-900.0, 210.0], [-560.0, 130.0], [-250.0, 260.0],
-		[80.0, 150.0], [420.0, 235.0], [760.0, 120.0], [1050.0, 200.0],
-	]
-	for p in peaks:
-		var x: float = cx + float(p[0])
-		var h: float = float(p[1])
-		draw_colored_polygon(PackedVector2Array([
-			Vector2(x - h * 1.5, horizon + 40.0),
-			Vector2(x, horizon - h),
-			Vector2(x + h * 1.5, horizon + 40.0),
-		]), Tune.COL_HILLS)
-
-
-func _draw_stage() -> void:
-	var c := Tune.ARENA_CENTER
-	var hs := Tune.ARENA_HALF
-	var tl := View.to_screen(c - hs)
-	var br := View.to_screen(c + hs)
-	var rect := Rect2(tl, br - tl)
-
-	draw_rect(rect, Tune.COL_ARENA_FLOOR)
-
-	# Grid on the floor. Judging distance is most of what the boss patterns will
-	# ask of you, and a flat plane with no reference points makes that guesswork.
-	var step := 140.0
-	var x := c.x - hs.x + step
-	while x < c.x + hs.x:
-		draw_line(Vector2(x, tl.y), Vector2(x, br.y), Color(1, 1, 1, 0.04), 1.0)
-		x += step
-	var y := c.y - hs.y + step
-	while y < c.y + hs.y:
-		var sy := View.to_screen(Vector2(0.0, y)).y
-		draw_line(Vector2(tl.x, sy), Vector2(br.x, sy), Color(1, 1, 1, 0.04), 1.0)
-		y += step
-
-	draw_rect(rect, Tune.COL_ARENA_EDGE, false, 3.0)
-	# Front lip: a brighter near edge reads as the stage coming toward you.
-	draw_line(Vector2(tl.x, br.y), Vector2(br.x, br.y), Color(1, 1, 1, 0.18), 4.0)

@@ -33,7 +33,7 @@ Godot 4 / GDScript. Open the project folder in Godot and press F5.
 | Space | dash |
 | **F** | Overheat |
 | Tab | switch variant |
-| **Numpad 1–5** | force boss pattern N (pulled forward from step 5) |
+| **Numpad 1–6** | force boss pattern N (pulled forward from step 5) |
 | F5 / Backspace | instant restart |
 
 ## The action economy
@@ -105,10 +105,17 @@ a fill that sweeps to tell you *when*.
 | 2 | PULSE | circle on the boss | safe zone is **outside**: get out |
 | 3 | RING | donut on the boss | the exact inverse — safe zone is **at melee**: run *toward* the thing winding up |
 | 4 | LANCE | rectangle | telegraphed lane, then it dashes down it. Multi-hit, so the lane stays lethal for the whole dash rather than only on the frame it goes live |
-| 5 | SPIRAL | projectiles | the only pattern solved by moving *continuously* rather than standing in the right place |
+| 5 | CROSS | four rects | axe slam into an X of shockwaves. Arms start at the boss, so melee is inside all four — the answer is to be out in a **gap** |
+| 6 | TRIPLE SWING | 3 cones | front, behind, front. Three beats in one pattern, so it's answered by moving *twice*; the second swing catches anyone who rolled straight through |
 
 2 and 3 exist as a pair. Either alone has a dominant answer ("stay at range");
-together they make range a decision you re-make every wind-up.
+together they make range a decision you re-make every wind-up. 5 pushes the
+other way again — RING wants you at melee, CROSS wants you out in a gap.
+
+**No bullet-hell patterns.** Every pattern is a placed ground shape with a
+wind-up, the way a Lost Ark boss actually works — not a projectile field you
+weave through. An earlier spiral-of-projectiles pattern was cut for exactly
+this reason.
 
 ### Patterns are coroutines
 
@@ -161,6 +168,13 @@ single node with a script and no properties.
 
 **`View`** — world ↔ screen projection plus the layer registry. The only place
 that knows the camera is angled.
+
+**Layers.** `z_index` in Godot is *relative to the parent* unless
+`z_as_relative` is off, so the Arena root sits at z 0 and every layer states its
+own depth (`Tune.Z_*`): backdrop −100, ground −10, telegraphs −15, actors 0.
+Drawing the backdrop on the root instead meant the root needed a low z, which
+dragged the ground layer below the floor and painted every AoE indicator
+underneath the stage. There's a regression test for it.
 
 **`AtkShape`** — one geometry object (circle / donut / cone / rect) that serves
 as *both* the telegraph drawing and the hitbox test. No physics in this project:

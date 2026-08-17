@@ -267,8 +267,10 @@ func _run_pattern(idx: int, token: int) -> void:
 			await _p_ring(token)
 		Tune.P_LANCE:
 			await _p_lance(token)
-		Tune.P_SPIRAL:
-			await _p_spiral(token)
+		Tune.P_CROSS:
+			await _p_cross(token)
+		Tune.P_TRIPLE:
+			await _p_triple(token)
 
 	# Only the pattern that is still current gets to end the state. An aborted
 	# one must not drag the boss out of the STUNNED it was interrupted into.
@@ -362,32 +364,57 @@ func _p_lance(token: int) -> void:
 	await _wait(0.1, token)
 
 
-## 5. Spiral of projectiles. The only pattern solved by moving continuously
-## rather than by standing in the right place, which is why it earns its slot.
-func _p_spiral(token: int) -> void:
-	var p: Dictionary = Tune.WARDEN_PATTERNS[Tune.P_SPIRAL]
+## 5. Axe slam into an X of shockwaves. Every arm starts at the boss, so melee
+## range is inside all four of them - the answer is to be out in a gap, which is
+## the exact inverse of RING and the reason both are in the pool.
+func _p_cross(token: int) -> void:
+	var p: Dictionary = Tune.WARDEN_PATTERNS[Tune.P_CROSS]
 	var windup := _windup(float(p["windup"]))
+	var arms := int(p["arms"])
+	var base := _to_player().angle() + deg_to_rad(float(p["arm_offset"]))
 
-	# A brief ring at the boss so the spiral doesn't start without warning.
-	var tell := _tele(AtkShape.circle(world_pos, body_radius * 1.8), windup, 0.05, Tune.COL_TELEGRAPH_ALT)
-	tell.anchor = self
-	tell.lock_at = 1.0
-	tell.flash_only = true
+	# All arms share one wind-up and land together: one read, one decision.
+	for i in range(arms):
+		var a := base + TAU * float(i) / float(maxi(arms, 1))
+		var shape := AtkShape.rect(world_pos, Vector2.from_angle(a),
+			float(p["length"]), float(p["half_width"]))
+		var tg := _tele(shape, windup, float(p["active"]))
+		tg.activated.connect(func(sh: AtkShape, _t: Telegraph) -> void:
+			_strike(sh, float(p["damage"]), "CROSS")
+		)
 
 	if not await _wait(windup, token):
 		return
+	FxRing.ground_pop(world_pos, body_radius, body_radius + 260.0, Tune.COL_TELEGRAPH, 0.45)
+	Events.shake_requested.emit(9.0)
+	await _wait(float(p["active"]) + 0.05, token)
 
-	var arms := int(p["arms"])
-	var shots := int(p["shots"])
-	var step := deg_to_rad(float(p["angle_step"]))
-	var ang := randf() * TAU
-	for _i in range(shots):
-		for arm in range(arms):
-			var a := ang + TAU * float(arm) / float(maxi(arms, 1))
-			Shot.fire(world_pos, Vector2.from_angle(a), float(p["shot_speed"]),
-				float(p["shot_radius"]), float(p["damage"]), Tune.COL_TELEGRAPH_ALT, "SPIRAL")
-		ang += step
-		if not await _wait(float(p["interval"]), token):
+
+## 6. Three swings: front, behind, front. One pattern with three beats, so it is
+## answered by moving twice rather than standing still once - and the second
+## swing is aimed at whoever rolled straight through the first.
+func _p_triple(token: int) -> void:
+	var p: Dictionary = Tune.WARDEN_PATTERNS[Tune.P_TRIPLE]
+	var swings := int(p["swings"])
+	var facing := _to_player()
+	var retarget: bool = bool(p["retarget_each"])
+
+	for i in range(swings):
+		var windup := _windup(float(p["windup"]) if i == 0 else float(p["windup_rest"]))
+		if retarget:
+			facing = _to_player()
+		# Alternate front / behind / front.
+		var dir := facing if i % 2 == 0 else -facing
+		var shape := AtkShape.cone(world_pos, dir, float(p["radius"]), float(p["half_angle"]))
+		var tg := _tele(shape, windup, float(p["active"]),
+			Tune.COL_TELEGRAPH if i % 2 == 0 else Tune.COL_TELEGRAPH_ALT)
+		tg.anchor = self
+		tg.lock_at = 1.0
+		tg.activated.connect(func(sh: AtkShape, _t: Telegraph) -> void:
+			_strike(sh, float(p["damage"]), "SWING")
+			Events.shake_requested.emit(5.0)
+		)
+		if not await _wait(windup + float(p["active"]) + 0.05, token):
 			return
 
 

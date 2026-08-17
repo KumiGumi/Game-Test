@@ -71,7 +71,7 @@ static func spawn(p_shape: AtkShape, p_windup: float, p_active: float, p_tint: C
 
 
 func _ready() -> void:
-	z_index = -5
+	z_index = Tune.Z_TELEGRAPH
 	# Always start in DELAY and let the first process tick fall through when
 	# start_delay is 0. Deciding here instead would bake in whatever start_delay
 	# was at add_child() time, silently ignoring a delay set afterwards - which
