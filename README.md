@@ -32,7 +32,7 @@ should fire mechanics at fixed HP rather than rolling them from the pool.
 |-------|--------|
 | WASD | move |
 | Mouse | aim |
-| **RMB** | auto attack (hold) |
+| **RMB** | auto attack (one shot per click) |
 | 1–4 | skills |
 | Space | dash |
 | **F** | Overheat |
@@ -48,10 +48,10 @@ Built around a two-long-casts-plus-fillers rhythm rather than six equal buttons.
 
 | Input | Skill | Cast | CD | Notes |
 |---|---|---|---|---|
-| RMB | Staff | 0.26s | — | one press, one shot |
+| RMB | Staff | 0.26s | — | **one press, one shot** — no hold-to-fire |
 | 1 | Frostfall | **instant** | 6s | 8 impacts over 2.4s |
-| 2 | Riposte | **instant** | 9s | the **counter** |
-| 3 | Emberlance | 1.20s | 10s | first long cast |
+| 2 | Riposte | **instant** | 9s | the **counter** — 300-unit cone |
+| 3 | Emberlance | 1.20s | 10s | first long cast — slow, fat projectile you must *lead* |
 | 4 | Starfall | 1.80s | 24s | second long cast, big stagger |
 | Space | Dash | — | 7s ×2 | 0.3s i-frames |
 | F | Overheat | — | meter | burst window |
@@ -147,9 +147,16 @@ which near a broken ledge is death rather than damage.
 ### The stagger check
 
 He channels for 6s; fill the bar or eat a ~300-unit shove. The bar does **not**
-decay during a check — the timer is the pressure, not leakage. It's tuned to
-want the big cast, so spending Starfall on filler a moment earlier is a real
-mistake rather than a rounding error.
+decay during a check — the timer is the pressure, not leakage.
+
+The requirement is deliberately set *below* what the kit produces with **neither
+Starfall nor Overheat** (rain 128 + Emberlance 45 + Riposte 30 = 203, against a
+requirement of 200). It started at 380, which meant only the big cast or a
+banked burst window could clear it — so hoarding Overheat for every check became
+the only correct play, and a cooldown you always spend the same way is not a
+decision. Now the burst window goes back to being spent on damage, and the live
+question is the cheaper one: *did you hold Starfall?* There's a test asserting
+the check stays clearable without either.
 
 ## Knockback, ledges and falling
 
@@ -259,7 +266,7 @@ one-line bail.
 godot --headless --path . tests/smoke.tscn --quit-after 40000
 ```
 
-Exits non-zero on failure. 137 checks: `AtkShape` containment for all four
+Exits non-zero on failure. 143 checks: `AtkShape` containment for all four
 shapes, the view projection round-trip, one-press-one-shot autos, instants
 staying instant, the rain landing spread over its duration (not all at once),
 cast queuing outliving the input buffer, dash-cancel, i-frames, Overheat, the
@@ -277,7 +284,8 @@ godot --headless --path . tests/dps_sim.tscn --quit-after 60000
 A DPS bench. Runs a priority rotation against a parked boss for 60s and prints
 sustained DPS plus the implied time-to-kill, so `WARDEN_MAX_HP` can be sized
 against the enrage timer instead of guessed. Current reading: **355 DPS**, which
-puts 70,000 HP at a 3.3-minute kill.
+puts the boss's 30,000 HP at a ~85-second kill — short enough to re-run a
+pattern rotation without it being a commitment.
 
 Both are here because a feel prototype gets its numbers rewritten constantly and
 a parse error shouldn't cost a play session.

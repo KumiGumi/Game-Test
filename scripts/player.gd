@@ -4,8 +4,8 @@ extends Actor
 ##
 ## The action economy is the point of this file:
 ##
-##   RMB   auto attack   - one press, one shot. No cooldown, holdable. Fills the
-##                         gaps so the hands are never idle, and charges Overheat.
+##   RMB   auto attack   - one press, one shot, no cooldown. Fills the gaps so
+##                         the hands are never idle, and charges Overheat.
 ##   1 / 2 instants      - low cooldown, usable as filler. 1 is multi-hit,
 ##                         2 is the counter (a counter you have to CAST is not
 ##                         a counter, so it must be instant).
@@ -484,7 +484,7 @@ func _cast_rain(s: Dictionary, mult: float, idx: int) -> void:
 ## Instant counter strike. Landing it inside a boss counter window is the whole
 ## reason it exists, so it reports success or failure either way.
 func _cast_counter(s: Dictionary, mult: float, idx: int) -> void:
-	var shape := AtkShape.rect(world_pos, act_aim, float(s["length"]), float(s["half_width"]))
+	var shape := AtkShape.cone(world_pos, act_aim, float(s["radius"]), float(s["half_angle"]))
 	var tg := Telegraph.spawn(shape, float(s["impact_windup"]), float(s["flash_time"]), s["color"])
 	tg.flash_only = true
 	tg.activated.connect(func(sh: AtkShape, _t: Telegraph) -> void:

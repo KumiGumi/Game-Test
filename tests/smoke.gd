@@ -151,6 +151,7 @@ func _test_player() -> void:
 	var after_one := _taken()
 	_check("one press produced exactly one hit",
 		is_equal_approx(after_one, float(Tune.AUTO["damage"])))
+	_check("auto does not repeat while held", not Tune.AUTO_HOLD_REPEAT)
 
 	print("--- instants")
 	_check("skill 1 is instant", Tune.cast_time(0, player.variant_idx) == 0.0)
@@ -175,6 +176,18 @@ func _test_player() -> void:
 	player._begin_action(1)
 	_check("counter is instant too", player.state != Player.State.ACTING)
 	await _sleep(0.4)
+	# The counter reaches further than the boss's own counter arc demands, so
+	# lunging in is a movement problem rather than a pixel-perfect aim problem.
+	var rip: Dictionary = Tune.SKILLS[1]
+	_check("counter reaches past melee", float(rip["radius"]) >= 250.0)
+	_check("counter is cone shaped", rip.has("half_angle") and float(rip["half_angle"]) >= 30.0)
+
+	# The fireball has to be slow enough that a moving boss must be led.
+	var fb: Dictionary = Tune.SKILLS[2]
+	var cross_time := Tune.ARENA_HALF.x / float(fb["bolt_speed"])
+	print("--- fireball crosses half the arena in %.2fs" % cross_time)
+	_check("fireball is slow enough to require leading", cross_time > 0.4)
+	_check("fireball hitbox is forgiving", float(fb["bolt_radius"]) >= 30.0)
 
 	print("--- long casts and queuing")
 	_aim_at_boss()
@@ -486,6 +499,16 @@ func _test_stagger_check() -> void:
 	_check("stagger check is running", warden.stagger_check)
 	_check("bar starts empty", warden.stagger < 1.0)
 	_check("required is the tuned value", is_equal_approx(warden.stagger_required, float(p["required"])))
+
+	# The check has to be clearable with NEITHER Starfall nor Overheat. If it
+	# isn't, hoarding the burst window for every check becomes the only correct
+	# play, and a cooldown you always spend the same way is not a decision.
+	var rain: Dictionary = Tune.SKILLS[0]
+	var baseline := float(rain["stagger_per_impact"]) * float(rain["impacts"]) \
+		+ float(Tune.SKILLS[1]["stagger"]) + float(Tune.SKILLS[2]["stagger"])
+	print("--- stagger: need %.0f, kit without Starfall/Overheat gives %.0f"
+		% [warden.stagger_required, baseline])
+	_check("clearable without Starfall or Overheat", baseline >= warden.stagger_required)
 
 	# The bar must not decay during a check - the timer is the pressure.
 	warden.apply_hit(0.0, 100.0, Tune.AUTO_ACTION, false)

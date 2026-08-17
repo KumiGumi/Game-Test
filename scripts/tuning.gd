@@ -204,8 +204,9 @@ const AUTO := {
 	"color": Color(0.85, 0.90, 1.0),
 }
 
-## Holding RMB keeps firing. Set false for strictly one shot per click.
-const AUTO_HOLD_REPEAT := true
+## Holding RMB keeps firing. Off: one shot per click, so the filler is an
+## action you take rather than a button you lean on.
+const AUTO_HOLD_REPEAT := false
 
 
 # ============================================================================
@@ -252,8 +253,10 @@ const SKILLS := [
 		"recovery": 0.22,
 		"cooldown": 9.0,
 		"is_counter": true,
-		"length": 200.0,
-		"half_width": 74.0,
+		## A cone, not a box: you are lunging at his face, and the reach has to
+		## forgive the fact that you are sprinting into a wind-up to use it.
+		"radius": 300.0,
+		"half_angle": 45.0,
 		"impact_windup": 0.05,
 		## How long the strike stays visible. Short enough to feel instant, long
 		## enough to actually see.
@@ -274,9 +277,12 @@ const SKILLS := [
 		"is_counter": false,
 		"damage": 380.0,
 		"stagger": 45.0,
-		"bolt_speed": 1700.0,
-		"bolt_radius": 17.0,
-		"bolt_range": 1000.0,
+		## Slow and fat. At this speed it takes most of a second to cross the
+		## arena, so a moving boss has to be LED - the biggest single-target hit
+		## in the kit should be the one you can miss.
+		"bolt_speed": 600.0,
+		"bolt_radius": 36.0,
+		"bolt_range": 1100.0,
 		"color": Color(1.0, 0.62, 0.28),
 	},
 	{   # 4 - LONGEST CAST, biggest hit, the stagger burst.
@@ -329,7 +335,11 @@ const IDENTITY_DECAY := 0.0
 # patterns the boss idles and repositions so the fight breathes instead of
 # being a continuous wall.
 
-const WARDEN_MAX_HP := 70000.0
+## Sized off the DPS bench (tests/dps_sim.tscn), not guessed. At ~358 sustained
+## DPS this is roughly a 90-second fight - short enough to re-run a pattern
+## rotation without it becoming a commitment, which is what a feel prototype
+## needs. A third of the old value is 23000 if it still drags.
+const WARDEN_MAX_HP := 30000.0
 const WARDEN_RADIUS := 62.0
 const WARDEN_MOVE_SPEED := 155.0
 
@@ -496,7 +506,13 @@ const WARDEN_PATTERNS := [
 		"verb": "STAGGER HIM",
 		"windup": 6.0,
 		"active": 0.20,
-		"required": 380.0,
+		## Was 380, which meant only Starfall or a banked Overheat could pass it -
+		## so hoarding Overheat for every check was the only correct play, which
+		## is no decision at all. Set below what the kit produces with NEITHER
+		## Starfall nor Overheat (rain 128 + Emberlance 45 + Riposte 30 = 203),
+		## so the burst window goes back to being spent on damage and the real
+		## question becomes the cheaper one: did you hold Starfall?
+		"required": 200.0,
 		"radius": 1400.0,
 		"fail_damage": 260.0,
 		"fail_knockback": 1330.0,   # ~300 units. Near a ledge this is death.
