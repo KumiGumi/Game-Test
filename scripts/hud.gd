@@ -5,7 +5,7 @@ extends Control
 ## code and not a scene edit.
 
 var player: Player
-var dummy: Dummy
+var warden: Warden
 ## Run time in seconds, pushed in by the Arena each frame. A plain float rather
 ## than an Arena reference, so the HUD doesn't depend on the Arena class.
 var elapsed: float = 0.0
@@ -68,6 +68,9 @@ func _draw() -> void:
 	if player == null or _font == null:
 		return
 	_draw_readout()
+	_draw_boss_bar()
+	_draw_counter_prompt()
+	_draw_stagger_check()
 	_draw_variant_banner()
 	_draw_identity()
 	_draw_hotbar()
@@ -98,7 +101,7 @@ func _draw_readout() -> void:
 	_text(Vector2(x, y), "DAMAGE   %9.0f" % _total_damage, Tune.COL_TEXT_DIM)
 	y += line + 6.0
 
-	var st: String = ["FREE", "ACTING", "DASHING"][player.state]
+	var st: String = ["FREE", "ACTING", "DASHING", "FALLING", "DEAD"][player.state]
 	var st_col: Color = Tune.COL_TEXT_DIM if player.state == Player.State.FREE else Tune.COL_CASTBAR
 	_text(Vector2(x, y), "PLAYER    %s" % st, st_col)
 	y += line
@@ -112,13 +115,86 @@ func _draw_readout() -> void:
 	if player.is_overheated():
 		_text(Vector2(x, y), "  OVERHEAT %.1fs" % player.overheat, Tune.COL_IDENTITY)
 		y += line
-	_text(Vector2(x, y), "  auto chain  %d / %d" % [player.auto_step + 1, Tune.AUTO["cast_times"].size()],
-		Tune.COL_TEXT_DIM, 13)
-	y += line + 6.0
 
-	if dummy != null:
-		_text(Vector2(x, y), "TARGET STAGGER  %d / %d" % [roundi(dummy.stagger), roundi(Tune.DUMMY_STAGGER_MAX)],
+	if warden != null and is_instance_valid(warden):
+		y += 6.0
+		_text(Vector2(x, y), "WARDEN    %s" % warden.state_name(), Tune.COL_WARN)
+		y += line
+		_text(Vector2(x, y), "  in state  %.2fs" % warden.state_time, Tune.COL_TEXT_DIM)
+		y += line
+		_text(Vector2(x, y), "  pattern   %s" % warden.pattern_name(),
+			Tune.COL_TELEGRAPH if warden.current_pattern >= 0 else Tune.COL_TEXT_DIM)
+		y += line
+		_text(Vector2(x, y), "  stagger   %d / %d" % [roundi(warden.stagger), roundi(Tune.WARDEN_STAGGER_MAX)],
 			Tune.COL_STAGGER)
+		y += line + 6.0
+		_text(Vector2(x, y), "FLOOR     %s" % ("BROKEN" if Actor.floor_is_broken() else "intact"),
+			Tune.COL_LEDGE if Actor.floor_is_broken() else Tune.COL_TEXT_DIM)
+
+
+## Boss health across the top. Deliberately the widest element on screen: the
+## enrage timer in step 4 turns this into the DPS check readout.
+func _draw_boss_bar() -> void:
+	if warden == null or not is_instance_valid(warden):
+		return
+	var vp := _vp()
+	var w := minf(vp.x * 0.62, 980.0)
+	var h := 18.0
+	var pos := Vector2(vp.x * 0.5 - w * 0.5, 84.0)
+	var f := warden.hp / maxf(warden.max_hp, 1.0)
+
+	draw_rect(Rect2(pos, Vector2(w, h)), Color(0, 0, 0, 0.7))
+	draw_rect(Rect2(pos, Vector2(w * f, h)), Tune.COL_HP)
+	# Halfway marker: step 4 hangs the phase change here.
+	draw_line(Vector2(pos.x + w * 0.5, pos.y), Vector2(pos.x + w * 0.5, pos.y + h),
+		Color(1, 1, 1, 0.45), 2.0)
+	draw_rect(Rect2(pos, Vector2(w, h)), Color(1, 1, 1, 0.28), false, 1.0)
+	_text(pos + Vector2(0, -5), "THE WARDEN", Tune.COL_TEXT, 16)
+	var hp_txt := "%d%%   %d / %d" % [roundi(f * 100.0), roundi(warden.hp), roundi(warden.max_hp)]
+	var tw := _font.get_string_size(hp_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 14).x
+	_text(pos + Vector2(w - tw, -5), hp_txt, Tune.COL_TEXT_DIM, 14)
+
+	# Name the pattern AND the movement it asks for. Every indicator in this
+	# fight should resolve to exactly one verb - go in, get out, find a gap. If a
+	# pattern can't be named with one, the pattern is the problem.
+	if warden.current_pattern >= 0:
+		var pat: Dictionary = Tune.WARDEN_PATTERNS[warden.current_pattern]
+		_text_center(vp.x * 0.5, pos.y + h + 16.0, String(pat["name"]), Tune.COL_TELEGRAPH, 17)
+		_text_center(vp.x * 0.5, pos.y + h + 38.0, String(pat["verb"]), Tune.COL_TEXT, 26)
+
+
+## The counter window. Deliberately loud: the whole mechanic is "see it, run
+## into his face, press 2", and a subtle cue makes that a memory test instead
+## of a reaction.
+func _draw_counter_prompt() -> void:
+	if warden == null or not is_instance_valid(warden) or not warden.counter_open:
+		return
+	var vp := _vp()
+	var pulse := 0.5 + 0.5 * sin(elapsed * 20.0)
+	_text_center(vp.x * 0.5, vp.y * 0.5 - 90.0, "COUNTER  [2]",
+		Tune.COL_COUNTER.lerp(Color.WHITE, pulse), 44)
+	_text_center(vp.x * 0.5, vp.y * 0.5 - 62.0, "hit him from the FRONT", Tune.COL_TEXT, 16)
+
+
+## The stagger check: a bar and a clock, both big. Failing is a huge knockback,
+## and near a broken ledge that is simply death.
+func _draw_stagger_check() -> void:
+	if warden == null or not is_instance_valid(warden) or not warden.stagger_check:
+		return
+	var vp := _vp()
+	var w := 560.0
+	var h := 26.0
+	var pos := Vector2(vp.x * 0.5 - w * 0.5, 150.0)
+	var f := clampf(warden.stagger / maxf(warden.stagger_required, 1.0), 0.0, 1.0)
+
+	draw_rect(Rect2(pos, Vector2(w, h)), Color(0, 0, 0, 0.8))
+	draw_rect(Rect2(pos, Vector2(w * f, h)), Tune.COL_STAGGER)
+	draw_rect(Rect2(pos, Vector2(w, h)), Color(1, 1, 1, 0.5), false, 2.0)
+	_text_center(vp.x * 0.5, pos.y - 8.0, "STAGGER HIM", Tune.COL_STAGGER, 24)
+	_text_center(vp.x * 0.5, pos.y + h + 22.0,
+		"%.1fs    %d / %d" % [maxf(warden.stagger_left, 0.0),
+			roundi(warden.stagger), roundi(warden.stagger_required)],
+		Tune.COL_TEXT if warden.stagger_left > 1.5 else Tune.COL_WARN, 20)
 
 
 func _draw_variant_banner() -> void:
@@ -176,7 +252,7 @@ func _draw_hotbar() -> void:
 		var r := Rect2(Vector2(x0 + float(i) * (bw + gap), y0), Vector2(bw, bh))
 		if i == 0:
 			_draw_slot(r, "RMB", String(Tune.AUTO["name"]), Tune.AUTO["color"], true, 0.0,
-				"chain %d/%d" % [player.auto_step + 1, Tune.AUTO["cast_times"].size()],
+				"%.2fs" % Tune.cast_time(Tune.AUTO_ACTION, player.variant_idx, player.is_overheated()),
 				"", player.state == Player.State.ACTING and player.act_idx == Tune.AUTO_ACTION)
 		elif i <= Tune.SKILL_COUNT:
 			var idx := i - 1
@@ -237,7 +313,7 @@ func _draw_player_hp() -> void:
 func _draw_hints() -> void:
 	var vp := _vp()
 	var y := vp.y - 8.0
-	_text(Vector2(18.0, y), "WASD move   MOUSE aim   RMB auto   1-4 skills   SPACE dash   F overheat   TAB variant   F5 restart",
+	_text(Vector2(18.0, y), "WASD move   MOUSE aim   RMB auto   1-4 skills   SPACE dash   F overheat   TAB variant   NUMPAD 1-5 force pattern   F5 restart",
 		Tune.COL_TEXT_DIM, 13)
 	var cancel_txt := "dash-cancel pays %d%% cooldown" % roundi(Tune.CANCEL_COOLDOWN_FRACTION * 100.0)
 	var w := _font.get_string_size(cancel_txt, HORIZONTAL_ALIGNMENT_LEFT, -1, 13).x
